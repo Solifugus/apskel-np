@@ -940,6 +940,36 @@ the cascade and sent after it settles**. Consequences:
   watcher-level counterpart of the `sourceClient` echo rule in the Wire
   section.
 
+RESOLVED (coalesced watcher snapshot): if further watched fields change while
+a watcher is pending within a cascade, it still fires once; `ctx.changes`
+carries every triggering change since the watcher last ran, in order, and
+`ctx.value`/`ctx.oldValue`/`ctx.field` are conveniences reflecting the most
+recent. No triggering change is invisible to the body.
+
+RESOLVED (seeding is silent): declared-local defaults are initial state, not
+changes. The store initializes them without change notification; no watcher
+fires on a default. A field comes into existence already holding its default
+— there is no old value.
+
+RESOLVED (origins): every `set` carries an origin — `user`, `server`, or
+`system`. Watcher-body writes default to `system`. The `server` origin is
+reserved to the Wire receive path; the engine rejects any other writer
+claiming it, because echo suppression trusts this origin and must not be
+forgeable by app code.
+
+RESOLVED (uniform effect timing): every `set` opens a cascade frame, even
+with zero registered watchers; deferred effects enqueued during any frame
+deliver at settle, coalesced per field to last value. Effects enqueued with
+no frame in flight deliver immediately. There is exactly one timing rule for
+set-consequent effects.
+
+RESOLVED (aborted cascades): a cascade that aborts (cycle detection)
+discards its entire deferred-effect queue — nothing partial is sent — but
+store writes already applied are not rolled back; there is no
+transactionality. Local state may therefore diverge from the server until
+the next successful write. This is accepted: a cascade abort is a
+developer-error class, not a runtime condition to recover from.
+
 ---
 
 # Functions
