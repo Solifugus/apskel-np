@@ -12,6 +12,11 @@ Apskel-NP is a declarative web/mobile application framework (XML app spec + SQL 
 
 The working method: implement one phase at a time; every phase ends with verification the developer runs personally (rows in `psql`, errors in the terminal, sync in two real browser tabs, forbidden writes via `curl`). An implementation summary is a claim, not evidence. If an implementation wants something the design forbids (a primitive holding state, a runtime reference lookup, an extra lifecycle method), the answer is to re-read the relevant RESOLVED entry — and if it genuinely doesn't fit, change the design doc first, never patch around it.
 
+## Commands
+
+- `node test/loader.test.js` (or `npm test`) — the Phase 1 harness; pure Node, no test framework. Expected outcomes per fixture are recorded in `test/fixtures/README.md`.
+- `node tools/load.js <path/to/app.xml> [--dump-tree]` — load an app and resolve all references; `--dump-tree` prints the instantiated tree with each reference site's bound target. Broken fixtures exit 1 with an error naming the reference site.
+
 ## Hard Constraints
 
 - Frontend: vanilla HTML/CSS/JS. Backend: Node.js + Express + PostgreSQL.
