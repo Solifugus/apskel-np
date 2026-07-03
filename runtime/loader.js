@@ -1,4 +1,4 @@
-// runtime/loader.js — Phase 1 loader.
+// runtime/loader.js — loader (Phases 1 and 3).
 //
 // Parses app.xml, expands composite mounts recursively (a fresh instance per
 // mount), and builds the instantiated component tree in memory. Every node
@@ -6,14 +6,22 @@
 // sites ({...} in text and attribute values) are collected here; binding them
 // is pathResolver.js's job.
 //
-// Phase 1 scope: no DOM, no store, no watchers, no Wire. A type that resolves
-// to components/<type>.xml (relative to the app directory) is a composite and
-// is expanded; any other type is a leaf node. <data> and <server> sections,
-// and <watchers>/<functions>/<style> blocks inside composites, are ignored
-// until their phases.
+// Phase 3 additions:
+//   * Component type resolution: app components/ -> framework components/ ->
+//     primitives (components/primitives/<type>/manifest.json, app dir first).
+//     An unknown type is a load-time error — Phase 1's any-unknown-type-is-
+//     a-leaf permissiveness ended when primitives became real.
+//   * Ordered content segments per node (text / ref / child) for rendering.
+//     A {name = default} declaration site produces no content segment.
+//   * field= on an input primitive is a reference expression WITHOUT braces,
+//     per the design examples (<input field=".title"/>).
+//
+// <data> and <server> sections, and <watchers>/<functions>/<style> blocks
+// inside composites, are ignored until their phases.
 
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { SaxesParser } from "saxes";
 
 export class ApskelLoadError extends Error {
@@ -30,6 +38,16 @@ export class ApskelLoadError extends Error {
 const DEFERRED_SECTION_TAGS = new Set(["watchers", "functions", "style"]);
 
 const REF_PATTERN = /\{[^{}]+\}/g;
+
+// Mirrors pathResolver's DECLARATION shape ({name = default}); duplicated to
+// keep the modules cycle-free.
+const DECLARATION_TEST = /^[A-Za-z_][A-Za-z0-9_]*\s*=/;
+
+const DEFAULT_FRAMEWORK_DIR = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "components"
+);
 
 // ---------------------------------------------------------------------------
 // Raw XML parsing (saxes) — produces a plain element tree with line numbers.
@@ -91,9 +109,10 @@ function parseXmlFile(file) {
 // ---------------------------------------------------------------------------
 // Instantiated component tree.
 
-export function loadApp(appXmlPath) {
+export function loadApp(appXmlPath, options = {}) {
   const appFile = path.resolve(appXmlPath);
   const appDir = path.dirname(appFile);
+  const frameworkDir = options.frameworkDir ?? DEFAULT_FRAMEWORK_DIR;
   const rawRoot = parseXmlFile(appFile);
   if (rawRoot.tag !== "app") {
     throw new ApskelLoadError(`root element must be <app>, found <${rawRoot.tag}>`, {
@@ -107,16 +126,19 @@ export function loadApp(appXmlPath) {
     type: "app",
     isRoot: true,
     isComposite: false,
+    isPrimitive: false,
     parent: null,
     path: "app",
     attrs: { ...rawRoot.attrs },
     file: appFile,
     line: rawRoot.line,
     children: [],
+    content: [],
     refSites: [],
     // Names declared in this scope. Composite-definition scopes must be
     // unique per name; the app scope may hold duplicates (ambiguity is then
-    // a reference-time error, per the design doc).
+    // a reference-time error, per the design doc) as long as sibling paths
+    // stay unique.
     names: new Map(),
     // Local fields declared by defaulted references ({name = default}) in
     // this scope. Filled by the resolver's declaration pass.
@@ -124,10 +146,11 @@ export function loadApp(appXmlPath) {
   };
 
   const ctx = {
-    // App-local components first; the shared framework components directory
-    // joins this list in a later phase.
-    componentDirs: [path.join(appDir, "components")],
+    // App-local components first, then the shared framework directory —
+    // the design doc's resolution order.
+    componentDirs: [path.join(appDir, "components"), frameworkDir],
     compositeCache: new Map(), // type -> parsed <component> raw element
+    manifestCache: new Map(), // manifest file -> parsed manifest
     allRefs: [],
     appWideNames: new Map(), // name -> [instance nodes], across the whole tree
   };
@@ -136,6 +159,7 @@ export function loadApp(appXmlPath) {
   if (!client) {
     throw new ApskelLoadError("missing <client> section", { file: appFile, line: rawRoot.line });
   }
+  root.clientAttrs = { ...client.attrs };
 
   for (const child of client.children) {
     if (child.tag) buildInstance(child, root, root, ctx, []);
@@ -155,6 +179,27 @@ function findCompositeFile(type, ctx) {
   return null;
 }
 
+function findPrimitive(type, ctx) {
+  for (const dir of ctx.componentDirs) {
+    const primitiveDir = path.join(dir, "primitives", type);
+    const manifestFile = path.join(primitiveDir, "manifest.json");
+    if (!fs.existsSync(manifestFile)) continue;
+    let manifest = ctx.manifestCache.get(manifestFile);
+    if (!manifest) {
+      try {
+        manifest = JSON.parse(fs.readFileSync(manifestFile, "utf8"));
+      } catch (e) {
+        throw new ApskelLoadError(`invalid manifest for primitive '${type}': ${e.message}`, {
+          file: manifestFile,
+        });
+      }
+      ctx.manifestCache.set(manifestFile, manifest);
+    }
+    return { dir: primitiveDir, manifest, manifestFile };
+  }
+  return null;
+}
+
 function buildInstance(rawEl, parent, scope, ctx, expansionStack) {
   const at = { file: rawEl.file, line: rawEl.line };
 
@@ -168,12 +213,20 @@ function buildInstance(rawEl, parent, scope, ctx, expansionStack) {
   if (!type) {
     throw new ApskelLoadError(`component instance <${rawEl.tag}> has no type attribute`, at);
   }
+  if (parent.children.some((c) => c.name === rawEl.tag)) {
+    throw new ApskelLoadError(
+      `duplicate sibling component name '${rawEl.tag}' under '${parent.path}' — ` +
+        `instance paths must be unique`,
+      at
+    );
+  }
 
   const node = {
     name: rawEl.tag,
     type,
     isRoot: false,
     isComposite: false,
+    isPrimitive: false,
     parent,
     path: parent.path + "." + rawEl.tag,
     attrs: {},
@@ -181,6 +234,7 @@ function buildInstance(rawEl, parent, scope, ctx, expansionStack) {
     line: rawEl.line,
     scope, // the naming scope this instance was written in
     children: [],
+    content: [],
     refSites: [],
     names: new Map(),
     locals: new Map(),
@@ -208,14 +262,50 @@ function buildInstance(rawEl, parent, scope, ctx, expansionStack) {
   ctx.appWideNames.set(node.name, appWide);
 
   parent.children.push(node);
+  parent.content.push({ kind: "child", name: node.name });
+
+  // Resolve the type: composite XML, else primitive manifest, else error.
+  const compositeFile = findCompositeFile(type, ctx);
+  let primitive = null;
+  if (!compositeFile) {
+    primitive = findPrimitive(type, ctx);
+    if (!primitive) {
+      throw new ApskelLoadError(
+        `unknown component type '${type}' for instance <${node.name}>: no composite ` +
+          `XML and no primitive manifest found under ${ctx.componentDirs.join(", ")}`,
+        at
+      );
+    }
+    if (primitive.manifest.type !== type) {
+      throw new ApskelLoadError(
+        `primitive manifest declares type '${primitive.manifest.type}' but lives in ` +
+          `'${type}/'`,
+        { file: primitive.manifestFile }
+      );
+    }
+    node.isPrimitive = true;
+    node.manifest = primitive.manifest;
+    node.primitiveDir = primitive.dir;
+  }
 
   // References in attribute values are written at the mount site, so they
-  // resolve in the writing scope.
-  for (const value of Object.values(node.attrs)) {
+  // resolve in the writing scope. On an input primitive, field= takes a
+  // bare reference expression without braces.
+  for (const [key, value] of Object.entries(node.attrs)) {
+    if (node.isPrimitive && node.manifest.input && key === "field") {
+      if (/[{}]/.test(value)) {
+        throw new ApskelLoadError(
+          `field attribute of <${node.name}> takes a bare reference expression ` +
+            `without braces (field="${value}")`,
+          at
+        );
+      }
+      node.fieldSite = addRefSite(`{${value}}`, rawEl.file, rawEl.line, node, scope, ctx);
+      continue;
+    }
     extractValueRefs(value, rawEl.file, rawEl.line, node, scope, ctx);
   }
 
-  const compositeFile = findCompositeFile(type, ctx);
   if (compositeFile) {
     node.isComposite = true;
     node.definitionFile = compositeFile;
@@ -263,18 +353,43 @@ function buildInstance(rawEl, parent, scope, ctx, expansionStack) {
 }
 
 // ---------------------------------------------------------------------------
-// Reference-site extraction. Sites are collected here and bound by
-// pathResolver.js; a binding is stored on the site itself.
+// Reference-site and content-segment extraction. Sites are collected here
+// and bound by pathResolver.js; a binding is stored on the site itself.
+// Content segments preserve mixed-content order for rendering; declaration
+// sites declare, they do not display, so they emit no segment.
 
 function extractTextRefs(rawText, owner, scope, ctx) {
   const { text, startLine, file } = rawText;
   REF_PATTERN.lastIndex = 0;
+  const parts = [];
+  let last = 0;
   let m;
   while ((m = REF_PATTERN.exec(text))) {
+    if (m.index > last) parts.push({ kind: "lit", text: text.slice(last, m.index) });
     const before = text.slice(0, m.index);
     const line = startLine + (before.match(/\n/g) || []).length;
-    addRefSite(m[0], file, line, owner, scope, ctx);
+    const inner = m[0].slice(1, -1).trim();
+    parts.push({ kind: "site", raw: m[0], line, isDecl: DECLARATION_TEST.test(inner) });
+    last = m.index + m[0].length;
   }
+  if (last < text.length) parts.push({ kind: "lit", text: text.slice(last) });
+
+  parts.forEach((part, i) => {
+    if (part.kind === "site") {
+      const site = addRefSite(part.raw, file, part.line, owner, scope, ctx);
+      if (!part.isDecl) owner.content.push({ kind: "ref", site });
+      return;
+    }
+    // Collapse whitespace; trim edges that touch a run boundary or a
+    // declaration site (which renders nothing). A single space between two
+    // displayed segments is meaningful and kept.
+    let t = part.text.replace(/\s+/g, " ");
+    const prev = parts[i - 1];
+    const next = parts[i + 1];
+    if (!prev || (prev.kind === "site" && prev.isDecl)) t = t.replace(/^ /, "");
+    if (!next || (next.kind === "site" && next.isDecl)) t = t.replace(/ $/, "");
+    if (t !== "") owner.content.push({ kind: "text", text: t });
+  });
 }
 
 function extractValueRefs(value, file, line, owner, scope, ctx) {
@@ -289,4 +404,5 @@ function addRefSite(raw, file, line, owner, scope, ctx) {
   const site = { raw, file, line, owner, scope, form: null, binding: null };
   owner.refSites.push(site);
   ctx.allRefs.push(site);
+  return site;
 }

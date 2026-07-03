@@ -5,9 +5,10 @@
   "type": "module",
   "license": "UNLICENSED",
   "scripts": {
-    "test": "node test/loader.test.js && node test/store.test.js"
+    "test": "node test/loader.test.js && node test/store.test.js && node test/render.test.js"
   },
   "dependencies": {
+    "express": "^5.2.1",
     "saxes": "^6.0.0"
   }
 }
