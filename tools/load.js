@@ -52,7 +52,8 @@ function describeBinding(binding) {
   }
   const field = binding.field ? ` field '${binding.field}'` : "";
   const table = binding.table ? ` (table '${binding.table}')` : "";
-  return `${binding.targetPath}${field}${table}`;
+  const declares = binding.declares ? ` (declares local, default ${binding.default})` : "";
+  return `${binding.targetPath}${field}${table}${declares}`;
 }
 
 function dumpTree(node, indent) {

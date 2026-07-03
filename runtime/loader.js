@@ -118,6 +118,9 @@ export function loadApp(appXmlPath) {
     // unique per name; the app scope may hold duplicates (ambiguity is then
     // a reference-time error, per the design doc).
     names: new Map(),
+    // Local fields declared by defaulted references ({name = default}) in
+    // this scope. Filled by the resolver's declaration pass.
+    locals: new Map(),
   };
 
   const ctx = {
@@ -180,6 +183,7 @@ function buildInstance(rawEl, parent, scope, ctx, expansionStack) {
     children: [],
     refSites: [],
     names: new Map(),
+    locals: new Map(),
   };
   for (const [k, v] of Object.entries(rawEl.attrs)) {
     if (k !== "type") node.attrs[k] = v;

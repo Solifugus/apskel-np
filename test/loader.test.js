@@ -110,6 +110,32 @@ check(
   upRefs.every((s) => s.binding?.targetPath === "app.directory" && s.binding.field === "heading")
 );
 
+const noteDecls = sites(root, '{note = ""}');
+check("two {note = \"\"} declaration sites exist", noteDecls.length === 2);
+check(
+  "{note = \"\"} declares the local on its own instance's scope",
+  noteDecls.every(
+    (s) =>
+      s.binding?.kind === "local" &&
+      s.binding.declares === true &&
+      s.binding.targetPath === s.scope.path &&
+      s.scope.locals.has("note")
+  )
+);
+
+const noteReads = sites(root, "{note}");
+check("two {note} read sites exist", noteReads.length === 2);
+check(
+  "{note} reads bind to the declared local of their own scope",
+  noteReads.every(
+    (s) =>
+      s.binding?.kind === "local" &&
+      !s.binding.declares &&
+      s.binding.targetPath === s.scope.path &&
+      s.binding.field === "note"
+  )
+);
+
 const absRefs = sites(root, "{app.title}");
 check(
   "{app.title} binds absolutely to the root's title attribute",
@@ -144,6 +170,13 @@ expectLoadFailure("fail-no-ancestor", "^name with no matching ancestor fails at 
   "no enclosing ancestor named 'workspace'",
   "needs-workspace.xml:4",
   "{^workspace.budget}",
+]);
+
+expectLoadFailure("fail-duplicate-local", "declaring the same local twice fails at load", [
+  "local field 'search' is already declared",
+  "fail-duplicate-local/app.xml:7",
+  "app.xml:6",
+  '{search = "preset"}',
 ]);
 
 expectLoadFailure("fail-app-reserved", "component instance named 'app' fails at load", [

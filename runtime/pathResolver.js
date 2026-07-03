@@ -9,7 +9,10 @@
 // Search strategies, per the design doc's RESOLVED entries:
 //   local     {field}        the enclosing naming scope's mount parameters
 //                            (or the <app> element's attributes at app
-//                            scope). No outward search, ever.
+//                            scope), plus locals declared by a defaulted
+//                            reference {name = default} in that scope. No
+//                            outward search, ever; locals are never created
+//                            implicitly by a bare read.
 //   bound     {.field}       nearest enclosing instance declaring table=,
 //                            including the owner itself.
 //   named     {name.field}   written inside a composite definition: that
@@ -31,10 +34,44 @@ import { ApskelLoadError } from "./loader.js";
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 export function resolveReferences(root) {
+  // Declaration pass first: register every {name = default} in its scope so
+  // a bare read never depends on document order relative to the declaration.
+  for (const site of root.allRefs) {
+    registerDeclaration(site);
+  }
   for (const site of root.allRefs) {
     resolveSite(site, root);
   }
   return root;
+}
+
+const DECLARATION = /^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/s;
+
+function registerDeclaration(site) {
+  const inner = site.raw.slice(1, -1).trim();
+  const m = inner.match(DECLARATION);
+  if (!m) return;
+  const [, name, defaultText] = m;
+  if (!LITERAL.test(defaultText)) {
+    fail(site, `local declaration '${name}' has a non-literal default '${defaultText}'`);
+  }
+  const scope = site.scope;
+  if (name in scope.attrs) {
+    fail(
+      site,
+      `local field '${name}' is already bound as a mount parameter of scope '${scope.path}'`
+    );
+  }
+  const prior = scope.locals.get(name);
+  if (prior) {
+    fail(
+      site,
+      `local field '${name}' is already declared in scope '${scope.path}' ` +
+        `(first declared at ${prior.site.file}:${prior.site.line})`
+    );
+  }
+  scope.locals.set(name, { site, default: defaultText });
+  site.isDeclaration = true;
 }
 
 function fail(site, message) {
@@ -84,6 +121,7 @@ function splitDomain(inner) {
 function classify(expr) {
   if (expr.startsWith("^")) return "upward";
   if (expr.startsWith(".")) return "bound";
+  if (DECLARATION.test(expr)) return "local";
   if (/^[A-Za-z_][A-Za-z0-9_.]*\(/.test(expr)) return "function";
   if (expr === "app" || expr.startsWith("app.")) return "absolute";
   if (expr.includes(".")) return "named";
@@ -93,12 +131,27 @@ function classify(expr) {
 // --- local: {field} ---------------------------------------------------------
 
 function resolveLocal(site, expr) {
-  if (!IDENT.test(expr)) fail(site, `malformed reference '${expr}'`);
   const scope = site.scope;
-  if (!(expr in scope.attrs)) {
+  const decl = expr.match(DECLARATION);
+  if (decl) {
+    // Registered by the declaration pass; the site binds to the field it
+    // declares on its own scope.
+    const [, name] = decl;
+    return {
+      kind: "local",
+      target: scope,
+      targetPath: scope.path,
+      field: name,
+      declares: true,
+      default: scope.locals.get(name).default,
+    };
+  }
+  if (!IDENT.test(expr)) fail(site, `malformed reference '${expr}'`);
+  if (!(expr in scope.attrs) && !scope.locals.has(expr)) {
     fail(
       site,
-      `bare name '${expr}' is not a local field of scope '${scope.path}'; ` +
+      `bare name '${expr}' is not a local field of scope '${scope.path}' ` +
+        `(neither a mount parameter nor a declared {name = default} local); ` +
         `bare names do not search outward — use {name.field}, {^name.field}, or {app...}`
     );
   }
