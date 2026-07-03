@@ -3,6 +3,8 @@
     <card type="layout" orient="vertical">
         Contact: {label}
         Listed under: {^directory.heading}
+        Note: {note = ""}
+        Current note: {note}
         <phoneField type="text-input"/>
         Preview: {phoneField.value}
     </card>

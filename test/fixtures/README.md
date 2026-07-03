@@ -12,7 +12,9 @@ Phase 1 scope notes (per the design doc's RESOLVED entries):
 * The local scope of a bare-name reference is the innermost enclosing
   composite instance (or the app root); its local fields are the parameters
   bound at that instance's mount site (or the `<app>` element's attributes at
-  app scope).
+  app scope) plus any field declared by a defaulted reference,
+  `{name = default}`, per RESOLVED (local field declaration). Locals are
+  never created implicitly by a bare read.
 * Every unresolved or ambiguous reference is a load-time error whose message
   names the reference site (file, line, and the reference text).
 
@@ -26,6 +28,8 @@ definition-scoped resolution and exercises four reference forms:
 | `{phoneField.value}` (named)      | `app.directory.entryOne.card.phoneField` | `app.directory.entryTwo.card.phoneField` |
 | `{label}` (local, mount param)    | `entryOne` param `label` ("Alice")       | `entryTwo` param `label` ("Bob")         |
 | `{^directory.heading}` (upward)   | `app.directory`                          | `app.directory`                          |
+| `{note = ""}` (local declaration) | declares `note` on `entryOne`            | declares `note` on `entryTwo`            |
+| `{note}` (local read)             | `entryOne`'s declared `note`             | `entryTwo`'s declared `note`             |
 
 Plus `{app.title}` (absolute) in `app.xml` → the `<app>` element's `title`.
 
@@ -52,6 +56,13 @@ candidate paths.
 `needs-workspace` references `{^workspace.budget}` but is mounted with no
 ancestor named `workspace` anywhere above it. Error must name the site in
 `components/needs-workspace.xml` and the missing ancestor name.
+
+## fail-duplicate-local/ — must fail at load
+
+`{search = ""}` declares the local `search` at app scope; the second
+declaration `{search = "preset"}` in the same scope is a load-time error,
+per RESOLVED (local field declaration). Error must name the second site
+(`app.xml`, its line) and point at where the first declaration was made.
 
 ## fail-app-reserved/ — must fail at load
 

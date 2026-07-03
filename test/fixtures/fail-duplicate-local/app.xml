@@ -1,0 +1,12 @@
+<app title="Duplicate Local Failure Fixture" version="0.1">
+
+    <client>
+
+        <landing type="layout" orient="vertical">
+            Search: {search = ""}
+            Search again: {search = "preset"}
+        </landing>
+
+    </client>
+
+</app>
