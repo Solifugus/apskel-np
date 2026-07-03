@@ -1,0 +1,10 @@
+<component name="echo-pad">
+
+    <padBox type="layout" orient="vertical">
+        {note = ""}
+        Pad note (independent per pad):
+        <noteInput type="text-input" field="note" placeholder="only this pad"/>
+        You wrote: {note}
+    </padBox>
+
+</component>

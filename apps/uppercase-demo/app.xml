@@ -1,0 +1,30 @@
+<app title="Uppercase Demo" version="0.1">
+
+    <client style="style.css" functions="client.js">
+
+        <page type="layout" orient="vertical">
+            {typed = ""}
+            {shout = ""}
+            <entryRow type="layout" orient="horizontal">
+                Type here:
+                <sourceInput type="text-input" field="typed" placeholder="type something"/>
+            </entryRow>
+            <shoutRow type="layout" orient="horizontal">
+                Uppercased:
+                <mirrorInput type="text-input" field="shout"/>
+            </shoutRow>
+            <longRow type="layout" orient="horizontal">
+                Same field, text-area:
+                <longInput type="text-area" field="typed" rows="3"/>
+            </longRow>
+            <buttonRow type="layout" orient="horizontal">
+                <pressMe type="button" action="demo">Press me (logs the action, no consumer yet)</pressMe>
+            </buttonRow>
+            Mirror line: {shout}
+            <padOne type="echo-pad"/>
+            <padTwo type="echo-pad"/>
+        </page>
+
+    </client>
+
+</app>

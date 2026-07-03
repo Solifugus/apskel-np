@@ -1,0 +1,9 @@
+<app title="Unknown Type Failure Fixture" version="0.1">
+
+    <client>
+
+        <thing type="does-not-exist"/>
+
+    </client>
+
+</app>

@@ -72,6 +72,19 @@ A component instance is named `app`, which is reserved for the root so that
 `{app...}` always means "from the root." Error must name the offending
 element and its location.
 
+## fail-unknown-type/ — must fail at load (from Phase 3 on)
+
+`type="does-not-exist"` resolves to no composite XML and no primitive
+manifest. With real primitives in the tree, an unknown type is a load-time
+error naming the mount site (Phase 1's any-unknown-type-is-a-leaf
+permissiveness ended when primitives became real).
+
+## fail-field-braces/ — must fail at load (from Phase 3 on)
+
+`field="{typed}"` — per the design examples (`<input field=".title"/>`),
+field attributes take a bare reference expression WITHOUT braces; braces
+there are a load-time error naming the mount site.
+
 ---
 
 ## Phase 2 — Central Store and Watcher Engine
@@ -127,3 +140,28 @@ by Phase 1: `app.draft = ""`, `app.count = 7` (number), `app.active = true`
 (boolean), and per-instance `app.workspace.padOne.note = "hi"` /
 `app.workspace.padTwo.note = "hi"` at distinct paths. Seeding is silent — a
 watcher on the seeded paths fires zero times.
+
+---
+
+## Phase 3 — Primitives and the Web Renderer
+
+The Node-testable slice is asserted by `test/render.test.js` against
+`apps/uppercase-demo/` (the browser behavior itself is personal
+verification, per the plan). Expected outcomes:
+
+* The demo loads; `sourceInput`/`mirrorInput`/`longInput` are primitives
+  with manifests, and their `field=` expressions bind to store paths
+  `app.typed` / `app.shout` / `app.typed`.
+* `echo-pad` mounted twice yields distinct field paths
+  `app.page.padOne.note` and `app.page.padTwo.note` — the no-cross-talk
+  guarantee, at the binding level.
+* Content segments preserve mixed-content order (text / ref / child), with
+  whitespace collapsed; a `{name = default}` declaration site produces NO
+  content segment (declarations declare, they do not display).
+* `serializeApp(root)` is acyclic JSON carrying `primitiveTypes`, per-node
+  `fieldPath`, locals, and content with `storePath` per ref segment;
+  `hydrateApp` restores what `store.seedDeclaredLocals` needs, and seeding
+  the hydrated tree initializes `app.typed = ""`, `app.page.padOne.note = ""`
+  etc.
+* `fail-unknown-type` and `fail-field-braces` fail at load naming their
+  mount sites (see above).

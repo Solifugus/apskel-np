@@ -1,0 +1,12 @@
+<app title="Field Braces Failure Fixture" version="0.1">
+
+    <client>
+
+        <box type="layout" orient="vertical">
+            {typed = ""}
+            <oops type="text-input" field="{typed}"/>
+        </box>
+
+    </client>
+
+</app>
