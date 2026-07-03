@@ -1,0 +1,15 @@
+<app title="Declared Locals Fixture" version="0.1">
+
+    <client>
+
+        <workspace type="layout" orient="vertical">
+            Draft: {draft = ""}
+            Count: {count = 7}
+            Active: {active = true}
+            <padOne type="pad"/>
+            <padTwo type="pad"/>
+        </workspace>
+
+    </client>
+
+</app>

@@ -1,0 +1,8 @@
+<component name="pad">
+
+    <area type="layout" orient="vertical">
+        Note: {note = "hi"}
+        Echo: {note}
+    </area>
+
+</component>

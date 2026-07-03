@@ -1,4 +1,6 @@
-# Phase 1 Fixtures — Expected Outcomes
+# Fixtures — Expected Outcomes
+
+## Phase 1 — Loader and Resolver
 
 Each fixture is a minimal app directory (`app.xml`, plus `components/` when a
 composite is involved). These expected outcomes are what `test/loader.test.js`
@@ -69,3 +71,51 @@ per RESOLVED (local field declaration). Error must name the second site
 A component instance is named `app`, which is reserved for the root so that
 `{app...}` always means "from the root." Error must name the offending
 element and its location.
+
+---
+
+## Phase 2 — Central Store and Watcher Engine
+
+Scenario modules under `watchers/`, asserted by `test/store.test.js`. Pure
+Node: no DOM, no server, no Wire. Watchers are registered programmatically
+(`engine.watch({name, fields, run})`) — the XML `<watchers>` surface lands
+with the phase that first needs it.
+
+### watchers/diamond.js
+
+A feeds B and C; both feed D. One external `set` of A settles with firing
+order `AtoB, AtoC, sumD` — `sumD` exactly once, seeing the final B and C
+(a=10 → d=31; a second settle at a=20 → d=61, sumD once again).
+
+### watchers/same-value.js
+
+The watcher's body writes the watched field with its current value: the
+value-change guard stops the cascade after the one firing caused by the
+external change. The watcher context carried `origin: "user"`, snapshot
+`value: 5`, `oldValue: undefined`. A second external write of the same value
+fires nothing.
+
+### watchers/cycle.js
+
+chaseA increments what chaseB watches and vice versa; values never stop
+changing. With `maxFiringsPerWatcher: 10`, each watcher fires exactly 10
+times, then the engine throws `ApskelCascadeError` (never hangs) whose
+message names the runaway watcher and includes the cascade trace — numbered
+firings with watcher name, triggering path, old -> new value, and origin.
+Nothing in the deferred-effect queue is delivered for a failed cascade.
+
+### watchers/deferred-effects.js
+
+Effects enqueued during the cascade are delivered only after settle:
+observed queue length mid-cascade is 0. Delivery is coalesced per field to
+the last enqueued value, in first-enqueue field order:
+`[["app.a", 30], ["app.mid", 4]]`.
+
+### watchers/declared-locals.js (+ declared-locals/ app dir)
+
+`store.seedDeclaredLocals(resolvedRoot)` initializes every `{name = default}`
+local at its declaring scope's path, evaluating the literal default recorded
+by Phase 1: `app.draft = ""`, `app.count = 7` (number), `app.active = true`
+(boolean), and per-instance `app.workspace.padOne.note = "hi"` /
+`app.workspace.padTwo.note = "hi"` at distinct paths. Seeding is silent — a
+watcher on the seeded paths fires zero times.
