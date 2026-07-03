@@ -1280,10 +1280,26 @@ current component; `{.field}` is a field bound to the current data context. The
 distinction lives at the reference site (the leading `.`) so locality is
 visible at a glance without consulting anything else.
 
+RESOLVED (local field declaration): a component's local (scratch) fields are
+its mount-site parameters plus any field declared by a defaulted reference —
+`{search = ""}` — written once inside the definition (or at app scope, inside
+`app.xml`). Other bare references to that name are reads of the declared
+field. A bare reference matching neither a parameter nor a declared local is
+a load-time error; locals are never created implicitly by reference, so a
+typo fails loudly rather than minting an empty field. Declaring the same
+local twice in one scope is likewise a load-time error.
+
 RESOLVED (relative search vs explicit paths): cross-component references require an
 explicit form — a component name, `^name`, or `app.`. There is no automatic search
 of parent or sibling scopes for bare names. Capability is unchanged (any component
 can reference any other); only the implicit walking is removed.
+
+RESOLVED (no app-wide fallback inside definitions): a named reference written
+inside a composite definition resolves within that definition's scope only;
+zero matches is a load-time error, never a fallback to app-wide search. A
+composite that needs app-level structure must say so explicitly with
+`app.x.y`, keeping the coupling visible. (App-level references in `app.xml`
+keep the app-wide uniqueness rule unchanged.)
 
 RESOLVED (ambiguity): an unresolved or ambiguous reference is a **load-time
 error**, not a silent best-effort resolution. Bare names that aren't local,
