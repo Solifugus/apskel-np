@@ -48,11 +48,27 @@ console.log("\nsame-value write");
   check("cascade terminated after exactly one firing", r.firedAfterCascade === 1);
   check(
     "watcher snapshot carried value 5, oldValue undefined, origin 'user'",
-    r.seen && r.seen.value === 5 && r.seen.oldValue === undefined && r.seen.origin === "user",
-    JSON.stringify(r.seen)
+    r.userSeen &&
+      r.userSeen.value === 5 &&
+      r.userSeen.oldValue === undefined &&
+      r.userSeen.origin === "user",
+    JSON.stringify(r.userSeen)
   );
-  check("second external same-value write fired nothing", r.firedTotal === 1);
-  check("value intact", r.x === 5);
+  check("same-value write from the Wire receive path fired nothing", r.firedAfterServerEcho === 1);
+  check(
+    "changed value from the Wire fired once with origin 'server'",
+    r.firedTotal === 2 &&
+      r.serverSeen.origin === "server" &&
+      r.serverSeen.value === 9 &&
+      r.serverSeen.oldValue === 5,
+    JSON.stringify(r.serverSeen)
+  );
+  check(
+    "app code claiming origin 'server' via set() is rejected",
+    r.forgedName === "ApskelStoreError" && r.forgedMessage.includes("reserved to the Wire"),
+    r.forgedMessage
+  );
+  check("the forged write applied nothing", r.x === 9);
 }
 
 // ---------------------------------------------------------------------------
@@ -80,6 +96,16 @@ console.log("\ngenuine cycle");
     r.message
   );
   check("error.trace holds the full firing history (20 entries)", r.traceLength === 20);
+  check(
+    "aborted cascade discarded its whole deferred-effect queue",
+    r.delivered.length === 0,
+    JSON.stringify(r.delivered)
+  );
+  check(
+    "store writes already applied were not rolled back (a=11, b=10)",
+    r.a === 11 && r.b === 10,
+    JSON.stringify({ a: r.a, b: r.b })
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -89,8 +115,13 @@ console.log("\ndeferred-effect queue");
   const r = run();
   check("no effect delivered mid-cascade", r.deliveredDuringCascade === 0);
   check(
-    "after settle: coalesced per field to last value, first-enqueue field order",
-    eq(r.delivered, [["app.a", 30], ["app.mid", 4]]),
+    "at settle: coalesced per field to last value, first-enqueue field order",
+    r.deliveredAtSettle === 2 && eq(r.delivered.slice(0, 2), [["app.a", 30], ["app.mid", 4]]),
+    JSON.stringify(r.delivered)
+  );
+  check(
+    "effect enqueued with no frame in flight delivered immediately",
+    r.deliveredAfterSolo === 3 && eq(r.delivered[2], ["app.solo", 42]),
     JSON.stringify(r.delivered)
   );
 }

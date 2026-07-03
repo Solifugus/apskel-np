@@ -36,7 +36,7 @@ An application is one `app.xml` + `schema.sql` (+ rarely, custom JS functions). 
 
 **Watchers are synchronous, value-change-triggered cascades.** Same-value writes don't fire; cascades run to completion in one tick with deduplication; watcher bodies get `(value, oldValue)` snapshots; runaway cycles are a bounded-depth error with a cascade trace, not a hang.
 
-**The Wire sits after the cascade, never inside it.** Network effects enqueue during a cascade and send after it settles, coalesced per-field (last value wins). Client→server is REST; server broadcasts accepted writes over SSE to all clients *including* the originator, tagged `sourceClient`. Incoming changes apply to the store marked with origin (`user`/`server`/`system`) so sync-outward watchers (autosave) don't echo server changes back.
+**The Wire sits after the cascade, never inside it.** Network effects enqueue during a cascade and send after it settles, coalesced per-field (last value wins). Client→server is REST; server broadcasts accepted writes over SSE to all clients *including* the originator, tagged `sourceClient`. Incoming changes apply to the store marked with origin (`user`/`server`/`system`) so sync-outward watchers (autosave) don't echo server changes back; the `server` origin enters only through `store.applyServerWrite` (the Wire receive path) — ordinary `set` rejects it as unforgeable.
 
 **Identity is a device-held credential, not a session.** Core tables are `users`, `devices`, `user_devices` plus a credential/token mechanism; there is deliberately **no `sessions` table** (its absence is a test). The device holds a durable credential and mints short-lived access tokens.
 

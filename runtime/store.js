@@ -8,7 +8,10 @@
 // set() carries an origin — 'user' / 'server' / 'system' — into every change
 // notification; this is the hook Phase 6's echo suppression uses (a watcher
 // whose job is to sync outward recognizes a server-originated change and
-// does not echo it back).
+// does not echo it back). Per RESOLVED (origins), 'server' is reserved to
+// the Wire receive path: it enters only through applyServerWrite, and set()
+// rejects it — echo suppression trusts this origin, so app code must not be
+// able to forge it.
 //
 // The value-change guard lives here: writing a field its current value does
 // not notify anyone. Per the design doc this is also the base cycle-breaker
@@ -39,17 +42,25 @@ export function createStore() {
     // Returns true if the value changed (and listeners were notified),
     // false if the write was absorbed by the value-change guard.
     set(path, value, origin = "system") {
+      if (origin === "server") {
+        throw new ApskelStoreError(
+          `origin 'server' on set of '${path}' is reserved to the Wire receive path ` +
+            `(use applyServerWrite); echo suppression trusts this origin and it must ` +
+            `not be forgeable by app code`
+        );
+      }
       if (!ORIGINS.includes(origin)) {
         throw new ApskelStoreError(
           `unknown origin '${origin}' on set of '${path}' (expected ${ORIGINS.join("/")})`
         );
       }
-      const oldValue = values.get(path);
-      if (values.has(path) && Object.is(oldValue, value)) return false;
-      values.set(path, value);
-      const change = { path, value, oldValue, origin };
-      for (const listener of listeners) listener(change);
-      return true;
+      return write(path, value, origin);
+    },
+
+    // The Wire receive path's door: the only writer that produces
+    // origin-'server' changes.
+    applyServerWrite(path, value) {
+      return write(path, value, "server");
     },
 
     // Silent write: no listeners, no cascade. Used for initialization that
@@ -78,6 +89,16 @@ export function createStore() {
       return [...values.keys()];
     },
   };
+
+  function write(path, value, origin) {
+    const oldValue = values.get(path);
+    if (values.has(path) && Object.is(oldValue, value)) return false;
+    values.set(path, value);
+    const change = { path, value, oldValue, origin };
+    for (const listener of listeners) listener(change);
+    return true;
+  }
+
   return store;
 }
 
