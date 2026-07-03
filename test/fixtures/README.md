@@ -92,8 +92,11 @@ order `AtoB, AtoC, sumD` — `sumD` exactly once, seeing the final B and C
 The watcher's body writes the watched field with its current value: the
 value-change guard stops the cascade after the one firing caused by the
 external change. The watcher context carried `origin: "user"`, snapshot
-`value: 5`, `oldValue: undefined`. A second external write of the same value
-fires nothing.
+`value: 5`, `oldValue: undefined`. A same-value write from the Wire receive
+path (`store.applyServerWrite`) fires nothing; a changed value from it fires
+once with `origin: "server"` — the echo-suppression hook. App code claiming
+origin `"server"` through ordinary `set()` throws `ApskelStoreError` (the
+origin is unforgeable, per RESOLVED (origins)) and applies nothing.
 
 ### watchers/cycle.js
 
@@ -102,14 +105,19 @@ changing. With `maxFiringsPerWatcher: 10`, each watcher fires exactly 10
 times, then the engine throws `ApskelCascadeError` (never hangs) whose
 message names the runaway watcher and includes the cascade trace — numbered
 firings with watcher name, triggering path, old -> new value, and origin.
-Nothing in the deferred-effect queue is delivered for a failed cascade.
+Per RESOLVED (aborted cascades): the deferred-effect queue is discarded
+whole (chaseA enqueued one effect per firing; zero are delivered), while
+store writes already applied stay applied — after the abort, `app.a` is 11
+and `app.b` is 10. No rollback, no partial send.
 
 ### watchers/deferred-effects.js
 
 Effects enqueued during the cascade are delivered only after settle:
 observed queue length mid-cascade is 0. Delivery is coalesced per field to
 the last enqueued value, in first-enqueue field order:
-`[["app.a", 30], ["app.mid", 4]]`.
+`[["app.a", 30], ["app.mid", 4]]`. Per RESOLVED (uniform effect timing), an
+effect enqueued with no cascade frame in flight (`app.solo`) delivers
+immediately.
 
 ### watchers/declared-locals.js (+ declared-locals/ app dir)
 
