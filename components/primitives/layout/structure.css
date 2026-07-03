@@ -1,0 +1,6 @@
+/* structural only: flexbox mechanics */
+.apskel-layout { display: flex; }
+.apskel-layout.apskel-orient-vertical { flex-direction: column; }
+.apskel-layout.apskel-orient-horizontal { flex-direction: row; }
+.apskel-layout.apskel-space-between { justify-content: space-between; }
+.apskel-layout.apskel-space-around { justify-content: space-around; }

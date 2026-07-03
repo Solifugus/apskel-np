@@ -1,0 +1,5 @@
+{
+  "type": "text-area",
+  "attributes": ["field", "placeholder", "rows"],
+  "input": true
+}

@@ -1,0 +1,5 @@
+{
+  "type": "text-input",
+  "attributes": ["field", "placeholder", "readonly"],
+  "input": true
+}
