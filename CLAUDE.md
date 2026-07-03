@@ -14,7 +14,7 @@ The working method: implement one phase at a time; every phase ends with verific
 
 ## Commands
 
-- `node test/loader.test.js` (or `npm test`) — the Phase 1 harness; pure Node, no test framework. Expected outcomes per fixture are recorded in `test/fixtures/README.md`.
+- `npm test` — all harnesses; pure Node, no test framework. Individually: `node test/loader.test.js` (Phase 1: loader/resolver), `node test/store.test.js` (Phase 2: store/watchers). Expected outcomes per fixture are recorded in `test/fixtures/README.md`.
 - `node tools/load.js <path/to/app.xml> [--dump-tree]` — load an app and resolve all references; `--dump-tree` prints the instantiated tree with each reference site's bound target. Broken fixtures exit 1 with an error naming the reference site.
 
 ## Hard Constraints
