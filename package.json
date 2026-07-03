@@ -1,0 +1,13 @@
+{
+  "name": "apskel-np",
+  "version": "0.1.0",
+  "description": "Apskel-NP: a declarative XML+SQL application framework",
+  "type": "module",
+  "license": "UNLICENSED",
+  "scripts": {
+    "test": "node test/loader.test.js"
+  },
+  "dependencies": {
+    "saxes": "^6.0.0"
+  }
+}

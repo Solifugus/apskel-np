@@ -1,0 +1,9 @@
+<app title="Missing Ancestor Failure Fixture" version="0.1">
+
+    <client>
+
+        <standalone type="needs-workspace"/>
+
+    </client>
+
+</app>

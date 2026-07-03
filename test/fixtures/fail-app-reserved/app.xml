@@ -1,0 +1,11 @@
+<app title="Reserved Name Failure Fixture" version="0.1">
+
+    <client>
+
+        <app type="layout" orient="vertical">
+            This component instance is illegally named "app".
+        </app>
+
+    </client>
+
+</app>

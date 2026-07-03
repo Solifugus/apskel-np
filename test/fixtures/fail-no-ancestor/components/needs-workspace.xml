@@ -1,0 +1,7 @@
+<component name="needs-workspace">
+
+    <panel type="layout" orient="vertical">
+        Budget: {^workspace.budget}
+    </panel>
+
+</component>

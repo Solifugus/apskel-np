@@ -1,0 +1,13 @@
+<app title="Ambiguous Name Failure Fixture" version="0.1">
+
+    <client>
+
+        <directory type="layout" orient="vertical" heading="Contacts">
+            <entryOne type="contact-card" label="Alice"/>
+            <entryTwo type="contact-card" label="Bob"/>
+            Selected phone: {phoneField.value}
+        </directory>
+
+    </client>
+
+</app>

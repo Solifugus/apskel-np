@@ -1,0 +1,9 @@
+<component name="contact-card">
+
+    <card type="layout" orient="vertical">
+        Contact: {label}
+        <phoneField type="text-input"/>
+        Preview: {phoneField.value}
+    </card>
+
+</component>

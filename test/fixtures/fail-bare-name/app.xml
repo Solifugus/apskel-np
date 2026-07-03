@@ -1,0 +1,11 @@
+<app title="Bare Name Failure Fixture" version="0.1">
+
+    <client>
+
+        <landing type="layout" orient="vertical">
+            Search: {search}
+        </landing>
+
+    </client>
+
+</app>

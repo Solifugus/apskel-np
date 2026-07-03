@@ -1,0 +1,13 @@
+<app title="Double Mount Fixture" version="0.1">
+
+    <client>
+
+        <directory type="layout" orient="vertical" heading="Contacts">
+            {app.title}
+            <entryOne type="contact-card" label="Alice"/>
+            <entryTwo type="contact-card" label="Bob"/>
+        </directory>
+
+    </client>
+
+</app>
