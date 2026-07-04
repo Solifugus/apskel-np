@@ -9,7 +9,7 @@
 // reload shows the draft exactly as left — a real round-trip, not a cache.
 //
 // Connection: PGHOST/PGPORT/PGDATABASE/PGUSER env vars override the
-// defaults (127.0.0.1:5432, apskel_dev, apskel); the password comes from
+// defaults (127.0.0.1:5432, apskel_development, apskel); the password comes from
 // ~/.pgpass (standard libpq format).
 
 import fs from "node:fs";
@@ -61,7 +61,7 @@ try {
 const dbConfig = {
   host: process.env.PGHOST ?? "127.0.0.1",
   port: Number(process.env.PGPORT ?? 5432),
-  database: process.env.PGDATABASE ?? "apskel_dev",
+  database: process.env.PGDATABASE ?? "apskel_development",
   user: process.env.PGUSER ?? "apskel",
 };
 dbConfig.password = process.env.PGPASSWORD ?? readPgPass(dbConfig);
