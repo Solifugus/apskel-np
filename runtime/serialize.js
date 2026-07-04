@@ -54,6 +54,29 @@ export function hydrateApp(treeJson) {
   return treeJson;
 }
 
+// Collect wire metadata for every bound field the app declares: the store
+// path, the data-context path, table, record (the Phase 4 row-selection
+// stopgap attribute), and column. Runs server-side on the resolved tree;
+// the result rides in the bundle and doubles as the server's allowlist.
+export function collectBoundFields(root) {
+  const byStorePath = new Map();
+  for (const site of root.allRefs) {
+    const binding = site.binding;
+    if (!binding || binding.kind !== "bound") continue;
+    const storePath = storePathOf(binding);
+    if (byStorePath.has(storePath)) continue;
+    const rawRecord = binding.target.attrs.record ?? null;
+    byStorePath.set(storePath, {
+      storePath,
+      path: binding.targetPath,
+      table: binding.table,
+      record: rawRecord !== null && /^\d+$/.test(rawRecord) ? Number(rawRecord) : rawRecord,
+      field: binding.field,
+    });
+  }
+  return [...byStorePath.values()];
+}
+
 export function findByPath(root, targetPath) {
   if (targetPath === "app") return root;
   let cur = root;
