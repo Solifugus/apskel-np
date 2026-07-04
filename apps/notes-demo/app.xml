@@ -1,0 +1,15 @@
+<app title="Notes Demo" version="0.1">
+
+    <client style="style.css">
+
+        <editor type="layout" orient="vertical" table="notes" record="1">
+            Note title:
+            <titleInput type="text-input" field=".title" placeholder="a title"/>
+            Body:
+            <bodyInput type="text-area" field=".body" rows="6" placeholder="write here"/>
+            Title so far: {.title}
+        </editor>
+
+    </client>
+
+</app>

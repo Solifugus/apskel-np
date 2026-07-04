@@ -171,3 +171,34 @@ verification, per the plan). Expected outcomes:
   etc.
 * `fail-unknown-type` and `fail-field-braces` fail at load naming their
   mount sites (see above).
+
+---
+
+## Phase 4 — The Wire, the Server, and Persistence
+
+Asserted by `test/wire.test.js` against `apps/notes-demo/`, DB-free: the
+database sits behind a narrow injected interface in the harness; real
+PostgreSQL round-trips are the developer's personal verification in psql,
+per the plan. Expected outcomes:
+
+* notes-demo's bound fields collect to wire metadata: store paths
+  `app.editor.title` / `app.editor.body`, table `notes`, record `1` (the
+  Phase 4 row-selection stopgap), fields `title` / `body`.
+* Send path (the Phase 2 seam consumed): a user-origin change to a bound
+  field enqueues during the cascade and produces exactly ONE
+  `apskel.data.set` envelope after settle, coalesced to the last value —
+  two writes to the same field in one cascade send once. A server-origin
+  change (`applyServerWrite`) sends NOTHING (echo suppression at the
+  watcher level).
+* Receive path: `apskel.data.changed` with my own `sourceClient` is
+  recognized and ignored (echo); a foreign change applies via
+  `applyServerWrite` with origin `server`; an unbound table/field is
+  ignored without error.
+* Server dispatch: a valid `apskel.data.set` updates the row (allowlisted
+  table.field pairs only — identifiers come from the app's own resolved
+  bindings, never raw from the client) and broadcasts
+  `apskel.data.changed` over SSE to all clients including the originator,
+  tagged `sourceClient`.
+* Server survival: malformed JSON -> 400 with a coherent body; unknown
+  wire type -> 400; table/field outside the app's bindings -> 400 with the
+  DB untouched; the server keeps answering afterward.
