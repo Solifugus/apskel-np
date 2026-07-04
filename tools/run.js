@@ -90,15 +90,10 @@ try {
   process.exit(1);
 }
 
-const schemaFile = path.join(appDir, "schema.sql");
-if (fs.existsSync(schemaFile)) {
-  await db.query(fs.readFileSync(schemaFile, "utf8"));
-  console.log(`applied ${schemaFile}`);
-}
-
 // An app that calls apskel.auth.* gets the identity core: the framework
 // tables (users, devices, user_devices — deliberately no sessions table)
-// and token-guarded data writes.
+// and token-guarded data writes. Framework schema first, so the app's own
+// schema may reference users.
 let auth = null;
 if (usesAuth) {
   const identitySql = fileURLToPath(new URL("../server/identity.sql", import.meta.url));
@@ -107,24 +102,32 @@ if (usesAuth) {
   auth = createAuth({ db });
 }
 
+const schemaFile = path.join(appDir, "schema.sql");
+if (fs.existsSync(schemaFile)) {
+  await db.query(fs.readFileSync(schemaFile, "utf8"));
+  console.log(`applied ${schemaFile}`);
+}
+
 // --- serve -----------------------------------------------------------------
 
 async function fetchInitialData() {
   const initialData = {};
+  const revisions = {};
   for (const b of bound) {
     if (b.record === null || b.record === undefined) continue; // no row chosen (Phase 7 territory)
-    const result = await db.query(
-      `SELECT "${b.field}" AS value FROM "${b.table}" WHERE id = $1`,
-      [b.record]
-    );
-    if (result.rows.length > 0) initialData[b.storePath] = result.rows[0].value;
+    const columns = b.conflict === "detect" ? `"${b.field}" AS value, revision` : `"${b.field}" AS value`;
+    const result = await db.query(`SELECT ${columns} FROM "${b.table}" WHERE id = $1`, [b.record]);
+    if (result.rows.length > 0) {
+      initialData[b.storePath] = result.rows[0].value;
+      if (b.conflict === "detect") revisions[`${b.table}:${b.record}`] = result.rows[0].revision;
+    }
   }
-  return initialData;
+  return { initialData, revisions };
 }
 
 const app = createAppServer({
   appDir,
-  bundleProvider: async () => ({ ...baseBundle, initialData: await fetchInitialData() }),
+  bundleProvider: async () => ({ ...baseBundle, ...(await fetchInitialData()) }),
 });
 attachWire(app, { db, bound, auth });
 

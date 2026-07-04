@@ -1,0 +1,19 @@
+/* App theme — ALL appearance lives here; primitives ship structure only. */
+
+body {
+  font-family: system-ui, sans-serif;
+  margin: 2rem;
+  color: #222;
+  background: #fafafa;
+}
+
+.apskel-layout { gap: 0.6rem; max-width: 40rem; }
+
+.apskel-text-input-control,
+.apskel-text-area-control {
+  font: inherit;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid #bbb;
+  border-radius: 4px;
+  background: #fff;
+}

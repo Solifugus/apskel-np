@@ -97,6 +97,7 @@ export function collectBoundFields(root) {
       table: binding.table,
       record: rawRecord !== null && /^\d+$/.test(rawRecord) ? Number(rawRecord) : rawRecord,
       field: binding.field,
+      conflict: binding.target.attrs.conflict ?? "offline-readonly",
     });
   }
   return [...byStorePath.values()];

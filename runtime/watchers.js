@@ -38,6 +38,7 @@ export class WatcherEngine {
   #effectHandlers = [];
   #maxFirings;
   #cascade = null;
+  #fireCounts = new Map(); // watcher name -> lifetime firings (criterion 5's counter)
 
   constructor(store, { maxFiringsPerWatcher = DEFAULT_MAX_FIRINGS } = {}) {
     this.#store = store;
@@ -45,14 +46,19 @@ export class WatcherEngine {
     store.onChange((change) => this.#onStoreChange(change));
   }
 
-  watch({ name, fields, run }) {
+  // skipOrigins: origins that do not schedule this watcher at all (e.g. the
+  // wire send watcher skips 'server') — declarative echo suppression, so a
+  // suppressed change leaves the fire counter untouched and "did not
+  // re-fire" is an observable number, not a claim about a body's early
+  // return.
+  watch({ name, fields, run, skipOrigins }) {
     if (!Array.isArray(fields) || fields.length === 0) {
       throw new Error(`watcher '${name}' must watch at least one field`);
     }
     if (typeof run !== "function") {
       throw new Error(`watcher '${name}' has no run function`);
     }
-    const watcher = { name: name || `watcher#${this.#watchers.length + 1}`, fields, run };
+    const watcher = { name: name || `watcher#${this.#watchers.length + 1}`, fields, run, skipOrigins };
     this.#watchers.push(watcher);
     for (const field of fields) {
       const list = this.#byField.get(field) || [];
@@ -64,6 +70,17 @@ export class WatcherEngine {
 
   onEffect(handler) {
     this.#effectHandlers.push(handler);
+  }
+
+  // Lifetime firings per watcher name — the observable form of echo
+  // suppression: a server-origin change must leave the wire send watcher's
+  // count unchanged. Exposed in the browser via window.__apskel.
+  fireCounts() {
+    return Object.fromEntries(this.#fireCounts);
+  }
+
+  fireCount(name) {
+    return this.#fireCounts.get(name) ?? 0;
   }
 
   // During a cascade: coalesced per field (last value wins), delivered after
@@ -110,6 +127,7 @@ export class WatcherEngine {
   #schedule(change) {
     const cascade = this.#cascade;
     for (const watcher of this.#byField.get(change.path) || []) {
+      if (watcher.skipOrigins?.includes(change.origin)) continue;
       const entry = cascade.pendingByWatcher.get(watcher);
       if (entry) {
         // Cascade deduplication: already pending — coalesce this change
@@ -132,6 +150,7 @@ export class WatcherEngine {
 
       const count = (cascade.firingCounts.get(watcher) || 0) + 1;
       cascade.firingCounts.set(watcher, count);
+      this.#fireCounts.set(watcher.name, (this.#fireCounts.get(watcher.name) ?? 0) + 1);
       if (count > this.#maxFirings) {
         throw new ApskelCascadeError(
           `watcher '${watcher.name}' fired more than ${this.#maxFirings} times in one ` +

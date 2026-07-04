@@ -22,22 +22,52 @@ export function attachWire(app, { db, bound, log = console, auth = null }) {
     ...(auth ? auth.handlers : {}),
 
     "apskel.data.set": async (envelope, req, res) => {
-      // With identity attached, data writes require a valid access token —
-      // Authorization: Bearer, per RESOLVED (token transport). Apps without
-      // auth (no apskel.auth.* call anywhere) stay tokenless, as in Phase 4.
-      if (auth && !auth.identity(req)) {
-        return res.status(401).json({ ok: false, error: "authentication required" });
-      }
+      const b = guardData(envelope, req, res);
+      if (!b) return;
       const { table, id, field, value, sourceClient } = envelope;
-      const b = allowlist.get(`${table}.${field}`);
-      if (!b) {
-        return res
-          .status(400)
-          .json({ ok: false, error: `no bound field '${table}.${field}' in this app` });
+
+      if (b.conflict === "detect") {
+        // Optimistic concurrency, per RESOLVED (conflict detection
+        // mechanism): the UPDATE is guarded on the revision the write was
+        // based on, and increments it. A mismatch is a coherent 409 with
+        // the current revision — v0.1 wires the mechanism, not the prompt.
+        if (typeof envelope.baseRevision !== "number") {
+          return res
+            .status(400)
+            .json({ ok: false, error: `baseRevision required (conflict=detect on ${table})` });
+        }
+        const result = await db.query(
+          `UPDATE ${quoteIdent(table)} SET ${quoteIdent(field)} = $1, ` +
+            `revision = revision + 1 WHERE id = $2 AND revision = $3 RETURNING revision`,
+          [value, id, envelope.baseRevision]
+        );
+        if (result.rowCount === 0) {
+          const current = await db.query(
+            `SELECT revision FROM ${quoteIdent(table)} WHERE id = $1`,
+            [id]
+          );
+          if (current.rows.length === 0) {
+            return res.status(404).json({ ok: false, error: `no ${table} row with id ${id}` });
+          }
+          return res.status(409).json({
+            ok: false,
+            error: `revision mismatch on ${table} row ${id}`,
+            currentRevision: current.rows[0].revision,
+          });
+        }
+        broadcast({
+          type: "apskel.data.changed",
+          path: b.path,
+          table,
+          id,
+          field,
+          value,
+          revision: result.rows[0].revision,
+          sourceClient: sourceClient ?? null,
+        });
+        return res.json({ ok: true, revision: result.rows[0].revision });
       }
-      if (id === undefined || id === null) {
-        return res.status(400).json({ ok: false, error: "missing id" });
-      }
+
       const result = await db.query(
         `UPDATE ${quoteIdent(table)} SET ${quoteIdent(field)} = $1 WHERE id = $2`,
         [value, id]
@@ -56,7 +86,48 @@ export function attachWire(app, { db, bound, log = console, auth = null }) {
       });
       res.json({ ok: true });
     },
+
+    // The read counterpart, per RESOLVED (reads through the Wire): same
+    // allowlist, value plus current revision for detect contexts.
+    "apskel.data.get": async (envelope, req, res) => {
+      const b = guardData(envelope, req, res);
+      if (!b) return;
+      const { table, id, field } = envelope;
+      const columns =
+        b.conflict === "detect" ? `${quoteIdent(field)} AS value, revision` : `${quoteIdent(field)} AS value`;
+      const result = await db.query(`SELECT ${columns} FROM ${quoteIdent(table)} WHERE id = $1`, [
+        id,
+      ]);
+      if (result.rows.length === 0) {
+        return res.status(404).json({ ok: false, error: `no ${table} row with id ${id}` });
+      }
+      const body = { ok: true, value: result.rows[0].value };
+      if (b.conflict === "detect") body.revision = result.rows[0].revision;
+      res.json(body);
+    },
   };
+
+  // Shared guard for the data types: token (when identity is attached, per
+  // RESOLVED (token transport) — apps without auth stay tokenless as in
+  // Phase 4), allowlist, and a concrete row id. Returns the binding or
+  // null after answering.
+  function guardData(envelope, req, res) {
+    if (auth && !auth.identity(req)) {
+      res.status(401).json({ ok: false, error: "authentication required" });
+      return null;
+    }
+    const { table, id, field } = envelope;
+    const b = allowlist.get(`${table}.${field}`);
+    if (!b) {
+      res.status(400).json({ ok: false, error: `no bound field '${table}.${field}' in this app` });
+      return null;
+    }
+    if (id === undefined || id === null) {
+      res.status(400).json({ ok: false, error: "missing id" });
+      return null;
+    }
+    return b;
+  }
 
   app.post("/wire", async (req, res) => {
     const envelope = req.body;

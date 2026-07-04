@@ -110,17 +110,30 @@ mountApp(root, {
   rootEl: document.getElementById("apskel-root"),
 });
 
-window.__apskel = { store, engine, root, byPath: (p) => findByPath(root, p) };
+window.__apskel = {
+  store,
+  engine,
+  root,
+  byPath: (p) => findByPath(root, p),
+  // Criterion 5's counter: __apskel.fireCounts() — an echoed change must
+  // leave the wire:* watchers' counts unchanged.
+  fireCounts: () => engine.fireCounts(),
+};
 
 if (bundle.wire) {
   const { attachWireSend, attachWireReceive } = await import("/runtime/wireClient.js");
   // Per-tab identity for echo recognition (distinct from the device
   // credential, which identifies the user).
   const clientId = "tab-" + crypto.randomUUID();
+  // Revision bookkeeping for conflict=detect contexts — wire state, never
+  // a visible field. Seeded from the bundle, updated by every broadcast.
+  const revisions = new Map(Object.entries(bundle.revisions ?? {}));
+  window.__apskel.revisions = revisions;
   attachWireSend({
     engine,
     bound: bundle.bound,
     clientId,
+    revisions,
     send: async (envelope) => {
       try {
         let r = await postWire(envelope);
@@ -133,13 +146,23 @@ if (bundle.wire) {
             r = await postWire(envelope);
           }
         }
+        if (r.status === 409) {
+          // Revision mismatch (conflict=detect): v0.1 logs, no prompt.
+          // Adopt the server's revision so the next write recovers.
+          const body = await r.json().catch(() => null);
+          if (typeof body?.currentRevision === "number") {
+            revisions.set(`${envelope.table}:${envelope.id}`, body.currentRevision);
+          }
+          console.warn("[apskel] write conflicted (revision mismatch):", envelope, body);
+          return;
+        }
         if (!r.ok) console.error("[apskel] wire send rejected:", r.status);
       } catch (e) {
         console.error("[apskel] wire send failed:", e);
       }
     },
   });
-  const handleEvent = attachWireReceive({ store, bound: bundle.bound, clientId });
+  const handleEvent = attachWireReceive({ store, bound: bundle.bound, clientId, revisions });
   const events = new EventSource(bundle.wire.events);
   events.onmessage = (e) => handleEvent(JSON.parse(e.data));
   window.__apskel.clientId = clientId;

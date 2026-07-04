@@ -37,6 +37,10 @@ export class ApskelLoadError extends Error {
 // Section tags inside a composite definition that belong to later phases.
 const DEFERRED_SECTION_TAGS = new Set(["watchers", "functions", "style"]);
 
+// The closed conflict-policy menu, per RESOLVED (conflict declaration
+// surface). Declared on the data-context element (the one with table=).
+const CONFLICT_MENU = new Set(["offline-readonly", "detect", "lww"]);
+
 const REF_PATTERN = /\{[^{}]+\}/g;
 
 // Mirrors pathResolver's DECLARATION shape ({name = default}); duplicated to
@@ -248,6 +252,23 @@ function buildInstance(rawEl, parent, scope, ctx, expansionStack) {
   };
   for (const [k, v] of Object.entries(rawEl.attrs)) {
     if (k !== "type") node.attrs[k] = v;
+  }
+
+  if (node.attrs.conflict !== undefined) {
+    if (!node.attrs.table) {
+      throw new ApskelLoadError(
+        `conflict= on <${node.name}> without table= — the conflict policy is a ` +
+          `property of a data context`,
+        at
+      );
+    }
+    if (!CONFLICT_MENU.has(node.attrs.conflict)) {
+      throw new ApskelLoadError(
+        `unknown conflict policy '${node.attrs.conflict}' on <${node.name}> — ` +
+          `the closed menu is: ${[...CONFLICT_MENU].join(", ")}`,
+        at
+      );
+    }
   }
 
   // Register the name in its scope. Names inside a composite definition must

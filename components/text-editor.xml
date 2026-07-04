@@ -1,0 +1,10 @@
+<component name="text-editor">
+
+    <editorBox type="layout" orient="vertical">
+        Title:
+        <titleInput type="text-input" field=".title" placeholder="article title"/>
+        Body:
+        <bodyInput type="text-area" field=".body" rows="10" placeholder="draft here — it autosaves"/>
+    </editorBox>
+
+</component>

@@ -45,8 +45,10 @@ const bound = collectBoundFields(root);
 check(
   "bound fields collect: title and body of notes row 1 at app.editor.*",
   eq(bound, [
-    { storePath: "app.editor.title", path: "app.editor", table: "notes", record: 1, field: "title" },
-    { storePath: "app.editor.body", path: "app.editor", table: "notes", record: 1, field: "body" },
+    // conflict defaults to offline-readonly when the context declares none
+    // (Phase 6) — everything else is the Phase 4 shape unchanged.
+    { storePath: "app.editor.title", path: "app.editor", table: "notes", record: 1, field: "title", conflict: "offline-readonly" },
+    { storePath: "app.editor.body", path: "app.editor", table: "notes", record: 1, field: "body", conflict: "offline-readonly" },
   ]),
   JSON.stringify(bound)
 );
