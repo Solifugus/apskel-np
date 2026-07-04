@@ -1,0 +1,23 @@
+<app title="Knowledge Foyer (broken: missing ancestor)" version="0.1">
+
+    <client style="style.css">
+
+        <who type="layout" orient="horizontal">
+            Signed in as: {app.identity.email} — {app.identity.status}
+        </who>
+
+        <signup type="register"/>
+        <signin type="login"/>
+
+        <workspace type="layout" orient="vertical">
+            <articleEditor type="text-editor" table="article_editions" record="1" conflict="detect"/>
+            Draft title so far: {app.workspace.articleEditor.title}
+        </workspace>
+
+        <aside type="layout" orient="horizontal">
+            Elsewhere in the tree: {^workspace.title}
+        </aside>
+
+    </client>
+
+</app>

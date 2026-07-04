@@ -298,3 +298,63 @@ injected transport: `loginUser` success writes `app.identity.*`
 (`status: "authenticated"`, userId/email/displayName, `error: ""`) with
 origin `system`; failure writes `app.identity.error` and leaves status
 `anonymous`. The identity region is written only by this machinery.
+
+---
+
+## Phase 6 — Slice Completion: Draft, Autosave, Two-Tab Sync
+
+Asserted by `test/slice.test.js`, DB-free (a stateful fake db carries the
+revision counter); the six v0.1 acceptance criteria are personal
+verification against `apps/knowledge-foyer/`. Fixtures and expected
+outcomes:
+
+### kf-broken-name/ / kf-broken-ancestor/ / kf-broken-ambiguous/ — must fail at load
+
+Criterion 1's three deliberate breaks, each a copy of the FULL
+knowledge-foyer app (login + register + text-editor all mounted):
+
+* `kf-broken-name`: app-scope `{articleEditorX.title}` matches no component
+  — error names the app.xml site.
+* `kf-broken-ancestor`: `{^workspace.title}` written in `aside`, which has
+  no ancestor named `workspace` — error names the site and the missing
+  ancestor.
+* `kf-broken-ambiguous`: two components named `articleEditor` in different
+  subtrees plus an app-scope bare `{articleEditor.title}` — error names the
+  site and lists both candidate paths.
+
+### fail-bad-conflict/ — must fail at load
+
+`conflict="merge"` is outside the closed menu (`offline-readonly`,
+`detect`, `lww`), per RESOLVED (conflict declaration surface). Load-time
+error naming the element and listing the menu.
+
+### knowledge-foyer bindings
+
+The app loads; bound metadata carries store paths
+`app.workspace.articleEditor.title` / `.body` (criterion 6's addressable
+path), table `article_editions`, record `1`, conflict `detect`. Contexts
+that declare no `conflict=` (notes-demo) collect as `offline-readonly` and
+their wire behavior is byte-identical to Phase 4 (no `baseRevision` key in
+envelopes).
+
+### Revision machinery (`detect`)
+
+* Send: a user-origin change to a detect-bound field carries `baseRevision`
+  from the client's revision bookkeeping (seeded from the bundle, updated
+  by every broadcast — including the client's own echo, which updates the
+  revision even though the store write is ignored; otherwise the next
+  write would false-conflict).
+* Server: the UPDATE is guarded (`WHERE id = $2 AND revision = $3`) and
+  increments the revision; the broadcast carries the new revision. A stale
+  `baseRevision` → 409 with the current revision, database untouched. A
+  missing `baseRevision` on a detect context → 400.
+* `apskel.data.get`: allowlisted read returning `{value, revision}` for
+  detect contexts (revision omitted otherwise); unbound table/field → 400;
+  with auth attached, tokenless data.get → 401 like data.set.
+
+### Watcher-fire counters (criterion 5's instrumentation)
+
+`engine.fireCounts()` maps watcher name → total firings. A server-origin
+`applyServerWrite` to a bound field fires the display watchers but NOT the
+wire send watcher (its count is unchanged — echo suppression made
+observable; in the browser this is read through `window.__apskel`).

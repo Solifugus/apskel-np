@@ -1,0 +1,11 @@
+<app title="Bad Conflict Policy" version="0.1">
+
+    <client>
+
+        <editor type="layout" orient="vertical" table="notes" record="1" conflict="merge">
+            <titleInput type="text-input" field=".title"/>
+        </editor>
+
+    </client>
+
+</app>

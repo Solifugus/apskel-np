@@ -1,0 +1,24 @@
+<app title="Knowledge Foyer (broken: ambiguous name)" version="0.1">
+
+    <client style="style.css">
+
+        <who type="layout" orient="horizontal">
+            Signed in as: {app.identity.email} — {app.identity.status}
+        </who>
+
+        <signup type="register"/>
+        <signin type="login"/>
+
+        <workspace type="layout" orient="vertical">
+            <articleEditor type="text-editor" table="article_editions" record="1" conflict="detect"/>
+        </workspace>
+
+        <scratchpad type="layout" orient="vertical">
+            <articleEditor type="text-editor" table="article_editions" record="1" conflict="detect"/>
+        </scratchpad>
+
+        Draft title so far: {articleEditor.title}
+
+    </client>
+
+</app>
