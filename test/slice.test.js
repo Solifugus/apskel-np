@@ -61,25 +61,25 @@ console.log("knowledge-foyer — bindings, criterion 6's path, the conflict menu
 const root = resolveReferences(loadApp(path.join(repoDir, "apps", "knowledge-foyer", "app.xml")));
 const bound = collectBoundFields(root);
 
+// Phase 7.1: knowledge-foyer's contexts became dynamic (record=
+// "app.currentEditionId") and a read-only reader pane joined — the
+// criterion-6 path app.workspace.articleEditor.title is unchanged.
+const dynamicEntry = (ctx, field) => ({
+  storePath: `${ctx}.${field}`,
+  path: ctx,
+  table: "article_editions",
+  record: null,
+  field,
+  conflict: "detect",
+  recordPath: "app.currentEditionId",
+});
 check(
-  "bound metadata: app.workspace.articleEditor.title/.body, detect, row 1",
+  "bound metadata: editor and reader panes, dynamic record, detect",
   eq(bound, [
-    {
-      storePath: "app.workspace.articleEditor.title",
-      path: "app.workspace.articleEditor",
-      table: "article_editions",
-      record: 1,
-      field: "title",
-      conflict: "detect",
-    },
-    {
-      storePath: "app.workspace.articleEditor.body",
-      path: "app.workspace.articleEditor",
-      table: "article_editions",
-      record: 1,
-      field: "body",
-      conflict: "detect",
-    },
+    dynamicEntry("app.workspace.articleEditor", "title"),
+    dynamicEntry("app.workspace.articleEditor", "body"),
+    dynamicEntry("app.reader", "title"),
+    dynamicEntry("app.reader", "body"),
   ]),
   JSON.stringify(bound)
 );
@@ -112,6 +112,7 @@ console.log("\nfire counters — echo suppression as a number, not a claim");
   const engine = new WatcherEngine(store);
   const sent = [];
   const revisions = new Map([["article_editions:1", 5]]);
+  store.seed("app.currentEditionId", 1); // the dynamic contexts' selected row
   attachWireSend({ engine, bound, clientId: "tab-me", revisions, send: (e) => sent.push(e) });
   engine.watch({
     name: "display",

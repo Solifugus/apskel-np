@@ -170,9 +170,64 @@ export function loadApp(appXmlPath, options = {}) {
     else extractTextRefs(child, root, root, ctx);
   }
 
+  const routesEl = rawRoot.children.find((c) => c.tag === "routes");
+  root.routes = routesEl ? buildRoutes(routesEl, root, ctx) : [];
+
   root.allRefs = ctx.allRefs;
   root.appWideNames = ctx.appWideNames;
   return root;
+}
+
+// <routes> at app level: each <route path> carries <set> children — no
+// assignment mini-language, every assignment its own load-validated
+// element, per RESOLVED (routes). field= is a brace-less reference bound
+// like any other; param= must name a :param in the route's own pattern.
+function buildRoutes(routesEl, root, ctx) {
+  const routes = [];
+  for (const routeEl of routesEl.children) {
+    if (!routeEl.tag) continue;
+    const at = { file: routeEl.file, line: routeEl.line };
+    if (routeEl.tag !== "route") {
+      throw new ApskelLoadError(`<routes> may contain only <route>, found <${routeEl.tag}>`, at);
+    }
+    const pattern = routeEl.attrs.path;
+    if (!pattern || !pattern.startsWith("/")) {
+      throw new ApskelLoadError(`<route> needs a path attribute starting with '/'`, at);
+    }
+    const params = pattern
+      .split("/")
+      .filter((s) => s.startsWith(":"))
+      .map((s) => s.slice(1));
+    const sets = [];
+    for (const setEl of routeEl.children) {
+      if (!setEl.tag) continue;
+      const setAt = { file: setEl.file, line: setEl.line };
+      if (setEl.tag !== "set") {
+        throw new ApskelLoadError(`<route> may contain only <set>, found <${setEl.tag}>`, setAt);
+      }
+      const { field, value, param } = setEl.attrs;
+      if (!field || /[{}]/.test(field)) {
+        throw new ApskelLoadError(
+          `<set> needs field= as a bare reference expression without braces`,
+          setAt
+        );
+      }
+      if ((value === undefined) === (param === undefined)) {
+        throw new ApskelLoadError(`<set> needs exactly one of value= or param=`, setAt);
+      }
+      if (param !== undefined && !params.includes(param)) {
+        throw new ApskelLoadError(
+          `<set> references param ':${param}' but the route pattern '${pattern}' does not declare it`,
+          setAt
+        );
+      }
+      const site = addRefSite(`{${field}}`, setEl.file, setEl.line, root, root, ctx);
+      site.forbidIdentity = true; // routes may not write the identity region
+      sets.push({ site, value, param });
+    }
+    routes.push({ path: pattern, params, sets, file: routeEl.file, line: routeEl.line });
+  }
+  return routes;
 }
 
 function findCompositeFile(type, ctx) {
@@ -329,6 +384,34 @@ function buildInstance(rawEl, parent, scope, ctx, expansionStack) {
         );
       }
       node.fieldSite = addRefSite(`{${value}}`, rawEl.file, rawEl.line, node, scope, ctx);
+      continue;
+    }
+    // visible= on any instance: a brace-less reference; the domain syntax
+    // ("app.view: editor, article") rides through the resolver's existing
+    // domain split, per RESOLVED (visible=).
+    if (key === "visible") {
+      if (/[{}]/.test(value)) {
+        throw new ApskelLoadError(
+          `visible attribute of <${node.name}> takes a bare reference expression ` +
+            `without braces (visible="${value}")`,
+          at
+        );
+      }
+      node.visibleSite = addRefSite(`{${value}}`, rawEl.file, rawEl.line, node, scope, ctx);
+      continue;
+    }
+    // record= on a data context: an integer literal is a fixed row; anything
+    // else is a brace-less reference whose VALUE varies at runtime, per
+    // RESOLVED (record selection).
+    if (key === "record" && node.attrs.table && !/^\d+$/.test(value)) {
+      if (/[{}]/.test(value)) {
+        throw new ApskelLoadError(
+          `record attribute of <${node.name}> takes a bare reference expression ` +
+            `without braces (record="${value}")`,
+          at
+        );
+      }
+      node.recordSite = addRefSite(`{${value}}`, rawEl.file, rawEl.line, node, scope, ctx);
       continue;
     }
     // action= mirrors field=: a brace-less reference expression, which the

@@ -1,19 +1,50 @@
-<app title="Knowledge Foyer" version="0.1">
+<app title="Knowledge Foyer" version="0.2">
 
     <client style="style.css">
+
+        {view = "landing"}
+        {currentEditionId = ""}
 
         <who type="layout" orient="horizontal">
             Signed in as: {app.identity.email} — {app.identity.status}
         </who>
 
-        <signup type="register"/>
-        <signin type="login"/>
+        <signup type="register" visible="app.view: landing"/>
+        <signin type="login" visible="app.view: landing"/>
 
-        <workspace type="layout" orient="vertical">
-            <articleEditor type="text-editor" table="article_editions" record="1" conflict="detect"/>
-            Draft title so far: {app.workspace.articleEditor.title}
+        <landing type="layout" orient="vertical" visible="app.view: landing">
+            Welcome to Knowledge Foyer. Pick a draft:
+            <openOne type="button" action='apskel.nav.go("/edit/1")'>Open draft 1</openOne>
+            <openTwo type="button" action='apskel.nav.go("/edit/2")'>Open draft 2</openTwo>
+        </landing>
+
+        <workspace type="layout" orient="vertical" visible="app.view: editor">
+            <articleEditor type="text-editor" table="article_editions" record="app.currentEditionId" conflict="detect"/>
+            <readIt type="button" action='apskel.field.set(app.view, "article")'>Read it</readIt>
+            <toLanding type="button" action='apskel.nav.go("/")'>Back to landing</toLanding>
         </workspace>
 
+        <reader type="layout" orient="vertical" visible="app.view: article" table="article_editions" record="app.currentEditionId" conflict="detect">
+            Title: {.title}
+            {.body}
+            <editIt type="button" action='apskel.field.set(app.view, "editor")'>Edit</editIt>
+            <toLandingTwo type="button" action='apskel.nav.go("/")'>Back to landing</toLandingTwo>
+        </reader>
+
     </client>
+
+    <routes>
+        <route path="/">
+            <set field="app.view" value="landing"/>
+        </route>
+        <route path="/edit/:id">
+            <set field="app.view" value="editor"/>
+            <set field="app.currentEditionId" param="id"/>
+        </route>
+        <route path="/article/:id">
+            <set field="app.view" value="article"/>
+            <set field="app.currentEditionId" param="id"/>
+        </route>
+    </routes>
 
 </app>

@@ -12,7 +12,15 @@
 export function serializeApp(root, extra = {}) {
   const primitiveTypes = new Set();
   const tree = nodeToJson(root, primitiveTypes);
-  return { tree, primitiveTypes: [...primitiveTypes].sort(), ...extra };
+  const routes = (root.routes ?? []).map((r) => ({
+    path: r.path,
+    params: r.params,
+    sets: r.sets.map((s) => ({
+      storePath: storePathOf(s.site.binding),
+      ...(s.value !== undefined ? { value: s.value } : { param: s.param }),
+    })),
+  }));
+  return { tree, primitiveTypes: [...primitiveTypes].sort(), routes, ...extra };
 }
 
 // The store path a binding reads/writes. Function-call bindings have no
@@ -35,6 +43,12 @@ function nodeToJson(node, primitiveTypes) {
     manifest: node.manifest ?? null,
     fieldPath: node.fieldSite ? storePathOf(node.fieldSite.binding) : null,
     action: node.actionSite ? functionToJson(node.actionSite.binding) : null,
+    visible: node.visibleSite
+      ? {
+          storePath: storePathOf(node.visibleSite.binding),
+          domain: parseDomain(node.visibleSite.domain),
+        }
+      : null,
     locals: [...node.locals].map(([name, decl]) => [name, decl.default]),
     content: node.content.map((seg) =>
       seg.kind === "ref"
@@ -45,6 +59,18 @@ function nodeToJson(node, primitiveTypes) {
     ),
     children: node.children.map((child) => nodeToJson(child, primitiveTypes)),
   };
+}
+
+// A visible= domain ("editor, article" or '"draft", "published"') parsed
+// to a plain value list; membership compares String(value). Bare words are
+// strings; quotes are stripped. Null for the bare truthy form.
+function parseDomain(domain) {
+  if (domain === null || domain === undefined) return null;
+  return domain
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s !== "")
+    .map((s) => (s.startsWith('"') && s.endsWith('"') ? s.slice(1, -1) : s));
 }
 
 // A bound function call, flattened for the browser: the name plus each
@@ -90,15 +116,25 @@ export function collectBoundFields(root) {
     if (!binding || binding.kind !== "bound") continue;
     const storePath = storePathOf(binding);
     if (byStorePath.has(storePath)) continue;
-    const rawRecord = binding.target.attrs.record ?? null;
-    byStorePath.set(storePath, {
+    const target = binding.target;
+    const rawRecord = target.attrs.record ?? null;
+    // A fixed row is a number; a dynamic selection ships as recordPath —
+    // the store path whose VALUE names the row, per RESOLVED (record
+    // selection). Static entries keep the Phase 4 shape exactly.
+    const entry = {
       storePath,
       path: binding.targetPath,
       table: binding.table,
-      record: rawRecord !== null && /^\d+$/.test(rawRecord) ? Number(rawRecord) : rawRecord,
+      record: target.recordSite
+        ? null
+        : rawRecord !== null && /^\d+$/.test(rawRecord)
+          ? Number(rawRecord)
+          : rawRecord,
       field: binding.field,
-      conflict: binding.target.attrs.conflict ?? "offline-readonly",
-    });
+      conflict: target.attrs.conflict ?? "offline-readonly",
+    };
+    if (target.recordSite) entry.recordPath = storePathOf(target.recordSite.binding);
+    byStorePath.set(storePath, entry);
   }
   return [...byStorePath.values()];
 }

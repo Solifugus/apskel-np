@@ -12,6 +12,7 @@ const repoDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 // database on every page load (reload shows the draft as left).
 export function createAppServer({ appDir, bundleProvider }) {
   const app = express();
+  app.locals.apskelShell = (req, res, next) => sendShell(bundleProvider, res, next);
 
   app.get("/app.json", async (req, res, next) => {
     try {
@@ -26,16 +27,31 @@ export function createAppServer({ appDir, bundleProvider }) {
   app.use("/primitives", express.static(path.join(repoDir, "components", "primitives")));
   app.use("/app", express.static(appDir));
 
-  app.get("/", async (req, res, next) => {
-    try {
-      const bundle = await bundleProvider();
-      const cssLinks = [
-        ...bundle.primitiveTypes.map(
-          (t) => `<link rel="stylesheet" href="/primitives/${t}/structure.css">`
-        ),
-        ...(bundle.style ? [`<link rel="stylesheet" href="/app/${bundle.style}">`] : []),
-      ].join("\n    ");
-      res.type("html").send(`<!doctype html>
+  app.get("/", app.locals.apskelShell);
+
+  return app;
+}
+
+// Deep links: the shell is served for ANY route-looking GET path, per
+// RESOLVED (routes) — registered LAST (after /wire and /events) so it
+// never shadows them. Paths with a file extension fall through to 404.
+export function attachShellFallback(app) {
+  app.get(/.*/, (req, res, next) => {
+    if (path.extname(req.path)) return next();
+    app.locals.apskelShell(req, res, next);
+  });
+}
+
+async function sendShell(bundleProvider, res, next) {
+  try {
+    const bundle = await bundleProvider();
+    const cssLinks = [
+      ...bundle.primitiveTypes.map(
+        (t) => `<link rel="stylesheet" href="/primitives/${t}/structure.css">`
+      ),
+      ...(bundle.style ? [`<link rel="stylesheet" href="/app/${bundle.style}">`] : []),
+    ].join("\n    ");
+    res.type("html").send(`<!doctype html>
 <html>
   <head>
     <meta charset="utf-8">
@@ -49,12 +65,9 @@ export function createAppServer({ appDir, bundleProvider }) {
   </body>
 </html>
 `);
-    } catch (e) {
-      next(e);
-    }
-  });
-
-  return app;
+  } catch (e) {
+    next(e);
+  }
 }
 
 function escapeHtml(s) {

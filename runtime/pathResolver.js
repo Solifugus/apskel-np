@@ -118,6 +118,16 @@ function resolveSite(site, root) {
         `action="apskel.auth.loginUser(email, password)" — got '${expr}'`
     );
   }
+  // Route targets (and any other flagged writer) may not claim the
+  // identity region — it is written only by the auth machinery.
+  if (site.forbidIdentity && site.binding) {
+    const p = site.binding.field
+      ? `${site.binding.targetPath}.${site.binding.field}`
+      : site.binding.targetPath;
+    if (p === "app.identity" || p.startsWith("app.identity.")) {
+      fail(site, `may not target the reserved identity region '${p}'`);
+    }
+  }
 }
 
 // A domain follows the first ':' outside quotes: {.status: "draft", "published"}
@@ -261,13 +271,15 @@ function resolveAbsolute(site, expr, root) {
   }
   const field = segs.slice(i).join(".");
   if (cur === root && field) {
-    // At the root we can validate: the field must be an <app> attribute.
-    // Deeper fields stay unvalidated until primitives carry manifests.
-    if (!(segs[i] in root.attrs)) {
+    // At the root we can validate: the field must be an <app> attribute or
+    // an app-scope declared local, per RESOLVED (absolute references reach
+    // app-scope locals). Deeper fields stay unvalidated until primitives
+    // carry manifests.
+    if (!(segs[i] in root.attrs) && !root.locals.has(segs[i])) {
       fail(
         site,
         `absolute reference '${expr}' does not resolve: the root has no child ` +
-          `component or app attribute named '${segs[i]}'`
+          `component, app attribute, or app-scope declared local named '${segs[i]}'`
       );
     }
   }
@@ -294,9 +306,23 @@ function resolveFunction(site, expr, root) {
     // A reference argument resolves with the same rules, at the same site.
     // (requireFunction applies to the call itself, not its arguments.)
     const sub = { ...site, raw: `{${arg}}`, form: null, binding: null, requireFunction: false };
+    // The assignment target of apskel.field.set is a write, not a read.
+    sub.forbidIdentity = name === "apskel.field.set";
     resolveSite(sub, root);
     return { kind: "ref", form: sub.form, binding: sub.binding };
   });
+  if (name === "apskel.field.set") {
+    if (args.length !== 2 || args[0].kind !== "ref") {
+      fail(
+        site,
+        `apskel.field.set takes (targetReference, value) — the first argument ` +
+          `is a write target, not a literal`
+      );
+    }
+  }
+  if (name === "apskel.nav.go" && args.length !== 1) {
+    fail(site, `apskel.nav.go takes exactly one argument (the path)`);
+  }
   return { kind: "function", name, args };
 }
 

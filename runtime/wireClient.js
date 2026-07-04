@@ -23,9 +23,17 @@
 // surface). Skipping the echo's revision would false-conflict the very
 // next write.
 
-const revisionKey = (b) => `${b.table}:${b.record}`;
+const emptyId = (id) => id === undefined || id === null || id === "";
 
-export function attachWireSend({ engine, bound, clientId, send, revisions = new Map() }) {
+export function attachWireSend({
+  engine,
+  bound,
+  clientId,
+  send,
+  revisions = new Map(),
+  isLoading = () => false,
+  log = console,
+}) {
   const byStorePath = new Map(bound.map((b) => [b.storePath, b]));
 
   for (const b of bound) {
@@ -36,24 +44,36 @@ export function attachWireSend({ engine, bound, clientId, send, revisions = new 
       // the fire counter proves it (criterion 5), rather than an early
       // return hiding inside this body.
       skipOrigins: ["server"],
-      run: (ctx) => ctx.enqueueEffect(b.storePath, ctx.value),
+      run: (ctx) => {
+        // The row id is captured at keystroke time, not send time, per
+        // RESOLVED (selection-change semantics).
+        const id = b.recordPath ? ctx.get(b.recordPath) : b.record;
+        if (b.recordPath && emptyId(id)) return; // empty context: sends suppressed
+        if (b.recordPath && isLoading(b.path)) {
+          log.warn?.(
+            `[apskel] keystroke on ${b.storePath} discarded: row ${id} still loading`
+          );
+          return;
+        }
+        ctx.enqueueEffect(b.storePath, { value: ctx.value, id });
+      },
     });
   }
 
-  engine.onEffect((storePath, value) => {
+  engine.onEffect((storePath, effect) => {
     const b = byStorePath.get(storePath);
     if (!b) return; // an effect someone else enqueued — not wire traffic
     const envelope = {
       type: "apskel.data.set",
       path: b.path,
       table: b.table,
-      id: b.record,
+      id: effect.id,
       field: b.field,
-      value,
+      value: effect.value,
       sourceClient: clientId,
     };
     if (b.conflict === "detect") {
-      envelope.baseRevision = revisions.get(revisionKey(b)) ?? 0;
+      envelope.baseRevision = revisions.get(`${b.table}:${effect.id}`) ?? 0;
     }
     send(envelope);
   });
@@ -62,20 +82,100 @@ export function attachWireSend({ engine, bound, clientId, send, revisions = new 
 }
 
 export function attachWireReceive({ store, bound, clientId, revisions = new Map() }) {
-  const byRowField = new Map(bound.map((b) => [`${b.table}:${b.record}:${b.field}`, b]));
+  const staticByRowField = new Map(
+    bound.filter((b) => !b.recordPath).map((b) => [`${b.table}:${b.record}:${b.field}`, b])
+  );
+  const dynamic = bound.filter((b) => b.recordPath);
 
   // Returns what happened, for the harness: 'applied' | 'echo' | 'unbound' | 'ignored'
   return function handleEvent(envelope) {
     if (!envelope || envelope.type !== "apskel.data.changed") return "ignored";
-    const b = byRowField.get(`${envelope.table}:${envelope.id}:${envelope.field}`);
+    // A dynamic context matches only when the broadcast row IS its current
+    // selection; a broadcast for another row of the same table is unbound.
+    const b =
+      staticByRowField.get(`${envelope.table}:${envelope.id}:${envelope.field}`) ??
+      dynamic.find(
+        (d) =>
+          d.table === envelope.table &&
+          d.field === envelope.field &&
+          String(store.get(d.recordPath)) === String(envelope.id)
+      );
     if (!b) return "unbound";
     // Revision bookkeeping happens for every broadcast on a bound row —
     // the echo's store write is ignored, its revision is not.
     if (envelope.revision !== undefined) {
-      revisions.set(revisionKey(b), envelope.revision);
+      revisions.set(`${b.table}:${envelope.id}`, envelope.revision);
     }
     if (envelope.sourceClient && envelope.sourceClient === clientId) return "echo";
     store.applyServerWrite(b.storePath, envelope.value);
     return "applied";
+  };
+}
+
+// The selection-change machinery, per RESOLVED (selection-change
+// semantics): paths never change; when a context's selection value
+// changes, sends suspend, each bound field fetches through
+// apskel.data.get, values seed SILENTLY (initial state — a non-silent
+// seed would fire the autosave watcher and write the fetch back out), the
+// row's revision is adopted, sends resume. Stale fetches (selection moved
+// again mid-flight) are discarded by generation.
+export function attachRecordContexts({
+  engine,
+  store,
+  bound,
+  revisions = new Map(),
+  call,
+  log = console,
+}) {
+  const contexts = new Map(); // context path -> {recordPath, fields, gen}
+  for (const b of bound) {
+    if (!b.recordPath) continue;
+    const c = contexts.get(b.path) ?? { path: b.path, recordPath: b.recordPath, fields: [], gen: 0 };
+    c.fields.push(b);
+    contexts.set(b.path, c);
+  }
+  const loading = new Set();
+
+  async function loadContext(c) {
+    const gen = ++c.gen;
+    const id = store.get(c.recordPath);
+    if (emptyId(id)) {
+      for (const b of c.fields) store.seed(b.storePath, undefined);
+      return;
+    }
+    loading.add(c.path);
+    try {
+      for (const b of c.fields) {
+        const resp = await call({ type: "apskel.data.get", table: b.table, id, field: b.field });
+        if (gen !== c.gen) return; // selection moved again — stale fetch
+        if (resp?.ok) {
+          store.seed(b.storePath, resp.value);
+          if (resp.revision !== undefined) revisions.set(`${b.table}:${id}`, resp.revision);
+        } else {
+          store.seed(b.storePath, undefined);
+          log.warn?.(`[apskel] could not load ${b.table} row ${id} ${b.field}:`, resp?.error);
+        }
+      }
+    } finally {
+      if (gen === c.gen) loading.delete(c.path);
+    }
+  }
+
+  const all = [];
+  for (const c of contexts.values()) {
+    engine.watch({
+      name: `record:${c.path}`,
+      fields: [c.recordPath],
+      run: () => {
+        loadContext(c);
+      },
+    });
+    all.push(loadContext(c)); // initial fetch (deep links: the route seeded silently)
+  }
+
+  return {
+    isLoading: (contextPath) => loading.has(contextPath),
+    refetchAll: () => Promise.all([...contexts.values()].map(loadContext)),
+    ready: Promise.all(all),
   };
 }

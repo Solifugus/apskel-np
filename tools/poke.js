@@ -37,7 +37,16 @@ if (!b) {
   for (const x of bundle.bound ?? []) console.error(`  ${x.storePath}`);
   process.exit(1);
 }
-console.log(`${storePath} -> ${b.table} row ${b.record} column ${b.field} (conflict=${b.conflict})`);
+// A dynamic context (record="app.currentEditionId") has no fixed row —
+// the script's caller picks one with --id, standing in for the selection.
+const rowId = b.record ?? (opt("id") !== undefined ? Number(opt("id")) : undefined);
+if (rowId === undefined || rowId === null) {
+  console.error(
+    `'${storePath}' selects its row at runtime (recordPath ${b.recordPath}) — pass --id <n>`
+  );
+  process.exit(2);
+}
+console.log(`${storePath} -> ${b.table} row ${rowId} column ${b.field} (conflict=${b.conflict})`);
 
 let token = null;
 const call = async (envelope) => {
@@ -72,14 +81,14 @@ if (bundle.auth) {
   console.log(`authenticated as ${login.body.email} (userId ${login.body.userId})`);
 }
 
-const read = await call({ type: "apskel.data.get", table: b.table, id: b.record, field: b.field });
+const read = await call({ type: "apskel.data.get", table: b.table, id: rowId, field: b.field });
 console.log(`read:  ${JSON.stringify(read.body)}`);
 
 if (setValue !== undefined) {
   const envelope = {
     type: "apskel.data.set",
     table: b.table,
-    id: b.record,
+    id: rowId,
     field: b.field,
     value: setValue,
     sourceClient: "poke-script",
@@ -90,7 +99,7 @@ if (setValue !== undefined) {
   const again = await call({
     type: "apskel.data.get",
     table: b.table,
-    id: b.record,
+    id: rowId,
     field: b.field,
   });
   console.log(`read:  ${JSON.stringify(again.body)}`);

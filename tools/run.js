@@ -19,7 +19,7 @@ import pg from "pg";
 import { loadApp, ApskelLoadError } from "../runtime/loader.js";
 import { resolveReferences } from "../runtime/pathResolver.js";
 import { serializeApp, collectBoundFields, collectUsesAuth } from "../runtime/serialize.js";
-import { createAppServer } from "../server/appServer.js";
+import { createAppServer, attachShellFallback } from "../server/appServer.js";
 import { attachWire } from "../server/wireServer.js";
 import { createAuth } from "../server/authServer.js";
 import { fileURLToPath } from "node:url";
@@ -130,6 +130,7 @@ const app = createAppServer({
   bundleProvider: async () => ({ ...baseBundle, ...(await fetchInitialData()) }),
 });
 attachWire(app, { db, bound, auth });
+attachShellFallback(app); // deep links: /edit/2 serves the shell — last, so /wire and /events win
 
 app.listen(port, () => {
   console.log(`Apskel running ${appDir} with the Wire`);

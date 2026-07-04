@@ -43,6 +43,20 @@ export function mountApp(root, { store, engine, document, primitives, rootEl, fu
     el.dataset.path = node.path;
     parentEl.appendChild(el);
 
+    // visible= — a display-none wrapper: instances, state, and watchers
+    // all survive hiding. Creation/destruction is collections' business.
+    if (node.visible) {
+      const update = (value) => {
+        el.style.display = isVisible(node.visible, value) ? "" : "none";
+      };
+      update(store.get(node.visible.storePath));
+      engine.watch({
+        name: `visible:${node.path}`,
+        fields: [node.visible.storePath],
+        run: (c) => update(c.value),
+      });
+    }
+
     let host = el;
     if (node.isPrimitive) {
       const module = primitives[node.type];
@@ -74,6 +88,13 @@ export function mountApp(root, { store, engine, document, primitives, rootEl, fu
       return;
     }
     if (slot === "action" && node.action) {
+      // field.set is a runtime primitive, not a network call: its first
+      // argument is a write target — assigned, never evaluated.
+      if (node.action.name === "apskel.field.set") {
+        const [target, source] = node.action.args;
+        store.set(target.storePath, evaluateArgs([source], store)[0], "user");
+        return;
+      }
       const fn = functions[node.action.name];
       if (!fn) {
         console.debug(`[apskel] no implementation for '${node.action.name}' (${node.path})`);
@@ -96,4 +117,11 @@ export function mountApp(root, { store, engine, document, primitives, rootEl, fu
 // through their load-time storePath. Exported for the Node harness.
 export function evaluateArgs(args, store) {
   return args.map((a) => (a.kind === "literal" ? a.value : store.get(a.storePath)));
+}
+
+// visible= membership: bare form is truthy; a domain is a String-compared
+// value set. Exported for the Node harness.
+export function isVisible(visible, value) {
+  if (!visible.domain) return !!value;
+  return visible.domain.some((d) => String(value) === d);
 }

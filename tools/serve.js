@@ -11,7 +11,7 @@ import path from "node:path";
 import { loadApp, ApskelLoadError } from "../runtime/loader.js";
 import { resolveReferences } from "../runtime/pathResolver.js";
 import { serializeApp } from "../runtime/serialize.js";
-import { createAppServer } from "../server/appServer.js";
+import { createAppServer, attachShellFallback } from "../server/appServer.js";
 
 const args = process.argv.slice(2);
 const appDirArg = args.find((a) => !a.startsWith("--"));
@@ -41,6 +41,7 @@ try {
 }
 
 const app = createAppServer({ appDir, bundleProvider: async () => bundle });
+attachShellFallback(app);
 
 app.listen(port, () => {
   console.log(`Apskel serving ${appDir} (static, no Wire)`);

@@ -20,3 +20,4 @@ CREATE TABLE IF NOT EXISTS article_editions (
 
 INSERT INTO articles (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
 INSERT INTO article_editions (id, article_id) VALUES (1, 1) ON CONFLICT (id) DO NOTHING;
+INSERT INTO article_editions (id, article_id) VALUES (2, 1) ON CONFLICT (id) DO NOTHING;

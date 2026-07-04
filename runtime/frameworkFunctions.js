@@ -13,6 +13,11 @@
 export const FRAMEWORK_FUNCTION_NAMES = new Set([
   "apskel.auth.registerUser",
   "apskel.auth.loginUser",
+  // Runtime primitives, not network calls: field.set is implemented by the
+  // binder (its first argument is a write target, never evaluated);
+  // nav.go is supplied by the boot once the router exists.
+  "apskel.field.set",
+  "apskel.nav.go",
 ]);
 
 // deps:

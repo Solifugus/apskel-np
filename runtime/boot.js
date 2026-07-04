@@ -4,15 +4,15 @@
 // engine (the same modules Node runs — served unmodified), seeds declared
 // locals silently, mounts the tree, and exposes the debug handle:
 //
-//   window.__apskel = { store, engine, root, byPath }
+//   window.__apskel = { store, engine, root, byPath, fireCounts, ... }
 //
 // State inspection goes through this handle — no primitive holds a value.
 //
-// Phase 5: when the app uses auth, the device credential lives in
-// localStorage (durable — it is what survives a full browser restart), a
-// silent token re-mint runs before mount, framework functions
-// (apskel.auth.*) are handed to the binder for button actions, and every
-// wire send carries the access token as Authorization: Bearer.
+// Phase 5: device credential in localStorage, silent token re-mint before
+// mount, framework functions for button actions, Bearer token on sends.
+// Phase 7.1: the router applies the initial URL silently before mount
+// (route state is initial state), record contexts fetch their selected
+// rows, and nav.go/field.set drive the two directions of URL<->state sync.
 
 import { createStore } from "/runtime/store.js";
 import { WatcherEngine } from "/runtime/watchers.js";
@@ -28,10 +28,21 @@ store.seedDeclaredLocals(root); // silent, before any watcher runs
 
 // Bound-field values fetched from the database at page load: initial
 // state, not changes — seeded silently, same rationale as declared locals.
+// (Dynamic-record contexts are absent here; they fetch once the router
+// has seeded the selection.)
 if (bundle.initialData) {
   for (const [storePath, value] of Object.entries(bundle.initialData)) {
     store.seed(storePath, value);
   }
+}
+
+// --- router (before mount: the initial URL is initial state) ---------------
+
+let router = null;
+if (bundle.routes?.length) {
+  const { createRouter } = await import("/runtime/router.js");
+  router = createRouter({ routes: bundle.routes, store, location, history });
+  router.apply(location.pathname, { silent: true });
 }
 
 // --- identity (before mount, so actions and the first paint see it) --------
@@ -39,6 +50,7 @@ if (bundle.initialData) {
 let token = null;
 let functions = {};
 let credentials = null;
+let recordContexts = null; // assigned below; onToken refetches through it
 
 const postWire = (envelope) =>
   fetch(bundle.wire?.endpoint ?? "/wire", {
@@ -71,14 +83,13 @@ if (bundle.auth) {
     return cred;
   };
 
-  functions = createFrameworkFunctions({
-    call,
-    store,
-    credentials,
-    onToken: (t) => {
-      token = t;
-    },
-  });
+  const onToken = (t) => {
+    token = t;
+    // A fresh login can unlock rows the anonymous boot could not read.
+    recordContexts?.refetchAll();
+  };
+
+  functions = createFrameworkFunctions({ call, store, credentials, onToken });
 
   // Anonymous until proven otherwise — seeded silently (initial state).
   store.seed("app.identity.status", "anonymous");
@@ -92,6 +103,10 @@ if (bundle.auth) {
   } catch {
     /* offline or no server auth — stay anonymous */
   }
+}
+
+if (router) {
+  functions["apskel.nav.go"] = (path) => router.navigate(path);
 }
 
 // --- mount -------------------------------------------------------------------
@@ -115,13 +130,16 @@ window.__apskel = {
   engine,
   root,
   byPath: (p) => findByPath(root, p),
-  // Criterion 5's counter: __apskel.fireCounts() — an echoed change must
-  // leave the wire:* watchers' counts unchanged.
+  // Criterion 5's counter: __apskel.fireCounts() — an echoed change (or a
+  // record switch's silent re-seed) must leave wire:* counts unchanged.
   fireCounts: () => engine.fireCounts(),
+  router,
 };
 
 if (bundle.wire) {
-  const { attachWireSend, attachWireReceive } = await import("/runtime/wireClient.js");
+  const { attachWireSend, attachWireReceive, attachRecordContexts } = await import(
+    "/runtime/wireClient.js"
+  );
   // Per-tab identity for echo recognition (distinct from the device
   // credential, which identifies the user).
   const clientId = "tab-" + crypto.randomUUID();
@@ -129,11 +147,17 @@ if (bundle.wire) {
   // a visible field. Seeded from the bundle, updated by every broadcast.
   const revisions = new Map(Object.entries(bundle.revisions ?? {}));
   window.__apskel.revisions = revisions;
+
+  // Dynamic-record contexts: fetch the selected row now (deep links — the
+  // router already seeded the selection), refetch on selection changes.
+  recordContexts = attachRecordContexts({ engine, store, bound: bundle.bound, revisions, call });
+
   attachWireSend({
     engine,
     bound: bundle.bound,
     clientId,
     revisions,
+    isLoading: recordContexts.isLoading,
     send: async (envelope) => {
       try {
         let r = await postWire(envelope);
@@ -166,6 +190,17 @@ if (bundle.wire) {
   const events = new EventSource(bundle.wire.events);
   events.onmessage = (e) => handleEvent(JSON.parse(e.data));
   window.__apskel.clientId = clientId;
+}
+
+// --- URL <-> state sync (after mount; seeds never fire watchers) -----------
+
+if (router) {
+  engine.watch({
+    name: "router:sync-url",
+    fields: router.targets,
+    run: () => router.syncUrl(),
+  });
+  window.addEventListener("popstate", () => router.apply(location.pathname));
 }
 
 if (bundle.clientFunctions) {
