@@ -1,0 +1,31 @@
+<app title="Data Graph" version="0.1">
+
+    <client>
+
+        <editor type="layout" orient="vertical" table="article_editions" record="1">
+            <titleInput type="text-input" field=".title"/>
+        </editor>
+
+        <notesBox type="layout" orient="vertical" table="notes" record="1">
+            <noteInput type="text-input" field=".text"/>
+        </notesBox>
+
+    </client>
+
+    <data>
+
+        <graph name="knowledge">
+            <users>
+                <articles read="public" write="owner" via="created_by">
+                    <article_editions read="public" write="owner"/>
+                </articles>
+            </users>
+        </graph>
+
+        <graph name="scratch">
+            <notes read="users" write="users"/>
+        </graph>
+
+    </data>
+
+</app>

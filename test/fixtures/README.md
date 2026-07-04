@@ -441,3 +441,81 @@ by the auth machinery, per RESOLVED (identity store region).
   ignored as unbound.
 * `apskel.field.set(target, value)`: assigns with origin `user`; the first
   argument must be a reference (a literal there is a load-time error).
+
+---
+
+## Phase 7.2 — permissions (design session 2)
+
+### data-graph/ — must load successfully
+
+`<data>` with two graphs. Loader output (`root.data.permissions`), per
+RESOLVED (permission rules live on the data graph) and RESOLVED (owner is
+a graph walk):
+
+* `article_editions`: `read=public write=owner`, ancestor hops
+  `article_editions→articles` (no `via`), `articles→users`
+  (`via="created_by"`).
+* `articles`: `read=public write=owner`, hop `articles→users`
+  (`via="created_by"`).
+* `notes`: `read=users write=users`, no hops (graph root; legal because
+  neither rule is `owner`).
+* `users` carries no rules — it is the ownership anchor, nothing more.
+
+FK **columns** are absent here: the loader records `via=` only; column
+resolution against the live schema is server startup's job.
+
+### fail-bad-rule/ — must fail at load
+
+`read="everyone"` — the closed read menu is `public`, `users`, `owner`,
+validated at load exactly like `conflict=`.
+
+### fail-write-public/ — must fail at load
+
+`write="public"` — anonymous writes are not on the write menu (`users`,
+`owner`, `none`). The menus differ by direction on purpose.
+
+### fail-rule-twice/ — must fail at load
+
+`notes` carries rule attributes on nodes in two different graphs —
+identical rules, still an error: a table's rules live on at most one node
+across all graphs. Traversal multiplicity is fine; permission multiplicity
+is not.
+
+### fail-rule-on-identity/ — must fail at load
+
+`<users read="public">` — the identity tables' rules are fixed
+(`read="owner" write="none"`) and not overridable, per RESOLVED (framework
+identity tables are Wire-locked).
+
+### fail-owner-unrooted/ — must fail at load
+
+`write="owner"` on a graph-root `articles` node with no `users` ancestor —
+`owner` is a graph walk, so a rule-bearing node without a path to `users`
+cannot mean anything.
+
+### Wire enforcement (fake db, real HTTP)
+
+* No-auth apps: tokenless end to end, exactly Phase 4 — no rule checks at
+  all.
+* Auth apps, table with no declared rules: defaults `read=users
+  write=users` — any valid token passes, no token is 401 (pre-7.2 behavior
+  preserved).
+* `read=public`: `apskel.data.get` succeeds with no token.
+* `write=owner`: a token whose userId matches the graph-walk owner → 200;
+  a different user's token → **403 naming table and rule**; no token →
+  401; owner NULL anywhere in the chain → 403 for everyone (unowned
+  denies).
+* The owner walk emits one parameterized SQL query joining up the resolved
+  hop columns.
+* `write=none` → 403 regardless of identity.
+* Identity tables: `apskel.data.get` on `users.email` with the row-owner's
+  token → the value; another user's token → 403; `users.password_hash` →
+  400 (fixed column set, never widened by bindings); any `apskel.data.set`
+  on `users` → 403.
+* SSE: `/events?token=` stamps the connection's identity at connect.
+  Broadcasts filter per-connection by the table's read rule: `public` →
+  every connection, `users` → identified connections only, `owner` → only
+  the owner's connections.
+* `/app.json` initialData: only `read=public` tables ship rows; a
+  non-public fixed-record context is absent from initialData and fetches
+  through the wire once a token exists.

@@ -1992,7 +1992,13 @@ rule requires identity → 401 (unchanged shape); authenticated but rule
 unsatisfied → **403 naming the table and rule** (`write on article_editions
 requires owner`). The client honors outcomes — a 403 on autosave logs a
 warning and does not retry (distinct from the 401 silent-re-mint path) — but
-never enforces; the server is the only enforcement point.
+never enforces; the server is the only enforcement point. "Every Wire door"
+includes the bundle: `/app.json` is fetched before authentication, so its
+`initialData` carries only tables whose read rule is `public` — a
+non-public fixed-record context boots empty and fetches through
+`apskel.data.get` once a token exists, exactly like a dynamic-record
+context. (Pre-7.2 the bundle shipped every fixed-record row tokenlessly —
+a leak this entry closes.)
 
 RESOLVED (broadcasts obey read rules): an open SSE firehose would make the
 rest theater. `EventSource` cannot set headers, so `/events?token=...`
@@ -2011,8 +2017,13 @@ RESOLVED (framework identity tables are Wire-locked): `users`, `devices`,
 `user_devices` get fixed, non-overridable rules on the data Wire:
 `read="owner"`, `write="none"` — a user may `apskel.data.get` their own
 row; nobody data-writes identity tables (that is what `apskel.auth.*` is
-for). An app declaring rules on them is a load-time error. Like the absent
-sessions table, this is curl-testable.
+for). An app declaring rules on them is a load-time error. The readable
+column set is likewise fixed — `users.email` and `users.display_name`,
+nothing else (never `password_hash`; the app's bindings cannot widen it) —
+and a `users` row's owner is itself, while `devices`/`user_devices` rows
+have no owner walk, so `read="owner"` denies them to everyone by the
+unowned-denies floor. Like the absent sessions table, this is
+curl-testable.
 
 DECISION-POINT (row-state-conditional read — recorded, not resolved):
 KF's true rule is "public may read *published*" — conditional on a row's

@@ -1,0 +1,22 @@
+<app title="Rules Declared Twice" version="0.1">
+
+    <client>
+
+        <editor type="layout" orient="vertical" table="notes" record="1">
+            <noteInput type="text-input" field=".text"/>
+        </editor>
+
+    </client>
+
+    <data>
+        <graph name="scratch">
+            <notes read="users" write="users"/>
+        </graph>
+        <graph name="alt">
+            <users>
+                <notes read="users" write="users"/>
+            </users>
+        </graph>
+    </data>
+
+</app>

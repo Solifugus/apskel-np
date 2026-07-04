@@ -1,0 +1,17 @@
+<app title="Anonymous Writes Are Not A Thing" version="0.1">
+
+    <client>
+
+        <editor type="layout" orient="vertical" table="notes" record="1">
+            <noteInput type="text-input" field=".text"/>
+        </editor>
+
+    </client>
+
+    <data>
+        <graph name="scratch">
+            <notes read="public" write="public"/>
+        </graph>
+    </data>
+
+</app>

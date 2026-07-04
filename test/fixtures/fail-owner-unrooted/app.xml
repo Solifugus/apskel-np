@@ -1,0 +1,17 @@
+<app title="Owner Needs A Path To Users" version="0.1">
+
+    <client>
+
+        <editor type="layout" orient="vertical" table="articles" record="1">
+            <titleInput type="text-input" field=".title"/>
+        </editor>
+
+    </client>
+
+    <data>
+        <graph name="loose">
+            <articles read="public" write="owner"/>
+        </graph>
+    </data>
+
+</app>
