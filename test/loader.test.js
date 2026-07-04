@@ -179,6 +179,12 @@ expectLoadFailure("fail-duplicate-local", "declaring the same local twice fails 
   '{search = "preset"}',
 ]);
 
+expectLoadFailure("fail-duplicate-sibling", "same-named siblings fail at load", [
+  "duplicate sibling component name 'item'",
+  "app.box",
+  "fail-duplicate-sibling/app.xml:7",
+]);
+
 expectLoadFailure("fail-app-reserved", "component instance named 'app' fails at load", [
   "reserved",
   "fail-app-reserved/app.xml:5",

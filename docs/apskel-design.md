@@ -1319,6 +1319,11 @@ a load-time error; locals are never created implicitly by reference, so a
 typo fails loudly rather than minting an empty field. Declaring the same
 local twice in one scope is likewise a load-time error.
 
+RESOLVED (declaration sites do not display): a defaulted reference
+`{name = ""}` is a declaration, not a display site — it renders nothing.
+Only reads (`{name}`) display the value. A component that wants to declare a
+field and show it writes both: the declaration and a read.
+
 RESOLVED (relative search vs explicit paths): cross-component references require an
 explicit form — a component name, `^name`, or `app.`. There is no automatic search
 of parent or sibling scopes for bare names. Capability is unchanged (any component
@@ -1359,6 +1364,12 @@ Concretely:
 
 Nothing in the earlier reference rules changes; the scope of "unambiguous"
 becomes "within the naming scope where the reference is written."
+
+RESOLVED (sibling names are unique): two children of the same parent may not
+share a name — identity is path, and same-named siblings would collide at
+one path. This is a load-time error. The looser app-scope rule (duplicate
+names in *different* subtrees stay legal until an ambiguous reference
+targets them) is unchanged.
 
 RESOLVED (resolution is compile-time / load-time binding): references are
 resolved **once, at load**, not looked up per read. The loader:

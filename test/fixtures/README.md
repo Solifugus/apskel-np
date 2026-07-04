@@ -72,6 +72,12 @@ A component instance is named `app`, which is reserved for the root so that
 `{app...}` always means "from the root." Error must name the offending
 element and its location.
 
+## fail-duplicate-sibling/ — must fail at load
+
+Two children of the same parent share the name `item`. Identity is path, so
+same-named siblings would collide at one path — a load-time error naming
+the second element, per RESOLVED (sibling names are unique).
+
 ## fail-unknown-type/ — must fail at load (from Phase 3 on)
 
 `type="does-not-exist"` resolves to no composite XML and no primitive
