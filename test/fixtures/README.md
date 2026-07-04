@@ -202,3 +202,98 @@ per the plan. Expected outcomes:
 * Server survival: malformed JSON -> 400 with a coherent body; unknown
   wire type -> 400; table/field outside the app's bindings -> 400 with the
   DB untouched; the server keeps answering afterward.
+
+---
+
+## Phase 5 — Identity: Register, Login, Device Credential
+
+Asserted by `test/auth.test.js`, DB-free (fake db records queries; the real
+register/restart-the-browser/psql round-trip is personal verification, per
+the plan). Fixtures and expected outcomes:
+
+### action-call/ — must load successfully
+
+A button with `action="apskel.auth.loginUser(email, password)"` — the
+brace-less function-call reference, per RESOLVED (action grammar). Loads
+with the action bound at load time: function name `apskel.auth.loginUser`,
+both arguments resolved as local reads to store paths `app.panel.email`
+and `app.panel.password`. The serialized node carries
+`action: { name, args: [{kind: "ref", storePath}, ...] }` so the browser
+invokes without any runtime lookup.
+
+### fail-unknown-function/ — must fail at load
+
+`action="apskel.auth.becomeAdmin(email)"` names no framework function.
+Unknown function names are load-time errors naming the site (`app.xml`,
+the button's line, the reference text), per RESOLVED (action grammar).
+
+### fail-action-not-function/ — must fail at load
+
+`action="email"` is a plain reference, not a function call. An action must
+be a function call; error names the site.
+
+### fail-fn-bad-arg/ — must fail at load
+
+`action="apskel.auth.loginUser(email, password)"` where only `password` is
+declared in scope. Function arguments resolve with the same rules at the
+same site — the bare name `email` fails exactly like any other undeclared
+bare read, sited at the button.
+
+### fail-identity-reserved/ — must fail at load
+
+A top-level component named `identity` collides with the reserved framework
+store region `app.identity.*`, per RESOLVED (identity store region). Error
+names the element and its location.
+
+### Framework composites and the litmus test
+
+`components/login.xml` and `components/register.xml` load as pure
+composites: declared locals (`{email = ""}` ...), input primitives bound to
+them, one button whose action calls `apskel.auth.loginUser` /
+`apskel.auth.registerUser`. The harness asserts **neither file contains
+`<functions`** — the litmus test from the design doc. `{app.identity.*}`
+references resolve to the reserved region (store paths `app.identity.email`
+etc.) without any component named `identity` existing.
+
+### apps/auth-demo/ — usesAuth detection
+
+The demo mounts `login` + `register` + a bound editor (`table="journal"`,
+`record="1"`). `collectUsesAuth(root)` is true because the resolved tree
+calls `apskel.auth.*`; for notes-demo it is false — Phase 4 apps serve
+exactly as before, tokenless.
+
+### Crypto (server/authServer.js, node:crypto only)
+
+* Password: scrypt hash/verify round-trip; wrong password fails; two hashes
+  of the same password differ (per-user salt).
+* Access token: mint -> verify returns `{userId, deviceId}`; an expired
+  token verifies to null; a tampered payload or signature verifies to null;
+  garbage verifies to null. Stateless — verification recomputes the HMAC,
+  no table.
+
+### Server dispatch (fake db over real HTTP)
+
+* `apskel.auth.register`: creates the user (scrypt hash, parameterized),
+  stores the device's credential **hash** (never the secret), links
+  `user_devices`, answers `{ok, userId, email, displayName, token}`.
+  Duplicate email -> 409 with a coherent body.
+* `apskel.auth.login`: correct password -> ok + token and the device is
+  linked; wrong password -> 401, no broadcast, and the same body as an
+  unknown email (no account enumeration).
+* `apskel.auth.token`: valid device id + secret -> fresh token for the most
+  recently linked user (the v0.1 stopgap); wrong secret or unknown device
+  -> 401. This silent re-mint is what survives a full browser restart.
+* With auth attached, `apskel.data.set` without a token -> 401 and the DB
+  untouched; with a forged/expired Bearer token -> 401; with a valid token
+  -> 200 + broadcast, exactly Phase 4 behavior.
+* Without auth attached (notes-demo), `apskel.data.set` still works
+  tokenless — Phase 4 regression pinned.
+
+### Client function invocation
+
+`evaluateArgs` resolves bound action args against the store (literals pass
+through, refs read their storePath). `createFrameworkFunctions` with
+injected transport: `loginUser` success writes `app.identity.*`
+(`status: "authenticated"`, userId/email/displayName, `error: ""`) with
+origin `system`; failure writes `app.identity.error` and leaves status
+`anonymous`. The identity region is written only by this machinery.

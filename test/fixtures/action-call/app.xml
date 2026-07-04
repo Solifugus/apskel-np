@@ -1,0 +1,14 @@
+<app title="Action Call" version="0.1">
+
+    <client>
+
+        <panel type="layout" orient="vertical">
+            {email = ""} {password = ""}
+            <emailInput type="text-input" field="email" placeholder="you@example.com"/>
+            <passwordInput type="text-input" field="password" kind="password"/>
+            <go type="button" action="apskel.auth.loginUser(email, password)">Log In</go>
+        </panel>
+
+    </client>
+
+</app>

@@ -1,0 +1,13 @@
+<app title="Function Bad Argument" version="0.1">
+
+    <client>
+
+        <panel type="layout" orient="vertical">
+            {password = ""}
+            <passwordInput type="text-input" field="password" kind="password"/>
+            <go type="button" action="apskel.auth.loginUser(email, password)">Log In</go>
+        </panel>
+
+    </client>
+
+</app>

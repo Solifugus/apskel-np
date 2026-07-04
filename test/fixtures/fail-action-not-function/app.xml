@@ -1,0 +1,13 @@
+<app title="Action Not A Function" version="0.1">
+
+    <client>
+
+        <panel type="layout" orient="vertical">
+            {email = ""}
+            <emailInput type="text-input" field="email"/>
+            <go type="button" action="email">Do It</go>
+        </panel>
+
+    </client>
+
+</app>

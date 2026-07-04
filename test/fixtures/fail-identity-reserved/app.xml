@@ -1,0 +1,12 @@
+<app title="Identity Reserved" version="0.1">
+
+    <client>
+
+        <identity type="layout" orient="vertical">
+            {note = ""}
+            <noteInput type="text-input" field="note"/>
+        </identity>
+
+    </client>
+
+</app>
