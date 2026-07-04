@@ -1874,9 +1874,15 @@ RESOLVED (selection-change semantics): **paths never change.** The bound
 component keeps its instance, its watchers, and its DOM; identity is path,
 and the row is context, not identity. When the selection value changes, the
 runtime: suspends sends for that context, fetches the new row through
-`apskel.data.get`, **seeds the fetched values silently** (they are initial
-state — a non-silent seed would fire the autosave watcher and write the
-fetch straight back out), adopts the row's revision, and resumes. Edges,
+`apskel.data.get`, **applies the fetched values through the server-origin
+door** (`applyServerWrite`) — display watchers repaint while the
+origin-suppressed wire watcher stays quiet, so nothing echoes back out —
+adopts the row's revision, and resumes. (The first ruling here said "seed
+silently"; verification proved that wrong: after mount, silence skips the
+display watchers too, so the DOM keeps the old row's text and the next
+keystroke autosaves it into the new row. Silent seeding is correct only
+*before* mount; once mounted, fetched row values are exactly what origin
+`server` exists for.) Edges,
 decided: a write always targets the row selected *when the keystroke
 happened* (captured at enqueue time, not send time); keystrokes landing
 between selection-change and fetch-arrival are discarded with a console

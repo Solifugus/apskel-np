@@ -268,6 +268,8 @@ console.log("\nselection machinery — silent re-seed, keystroke rules, receive"
 
   const TITLE = "app.workspace.articleEditor.title";
   const WIRE = `wire:${TITLE}`;
+  let repaints = 0;
+  engine.watch({ name: "display", fields: [TITLE], run: () => (repaints += 1) });
 
   check("empty selection: fields undefined, nothing fetched", store.get(TITLE) === undefined);
   store.set(TITLE, "typed into nothing", "user");
@@ -276,12 +278,14 @@ console.log("\nselection machinery — silent re-seed, keystroke rules, receive"
   store.set("app.currentEditionId", 1, "system");
   await tick();
   await tick();
+  const repaintsBefore = repaints;
   check(
-    "selection 1: values seeded SILENTLY (wire fireCount 0 for the seed), revision adopted",
+    "selection 1: values applied via SERVER origin — display repainted, wire watcher unmoved, revision adopted",
     store.get(TITLE) === "One" &&
       revisions.get("article_editions:1") === 3 &&
-      engine.fireCount(WIRE) === 1, // only the earlier suppressed keystroke
-    JSON.stringify({ title: store.get(TITLE), counts: engine.fireCounts() })
+      engine.fireCount(WIRE) === 1 && // only the earlier suppressed keystroke
+      repaintsBefore >= 2, // the keystroke AND the fetch both repainted (the bug was the fetch not repainting)
+    JSON.stringify({ title: store.get(TITLE), repaints, counts: engine.fireCounts() })
   );
 
   store.set(TITLE, "One edited", "user");

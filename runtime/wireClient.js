@@ -115,10 +115,13 @@ export function attachWireReceive({ store, bound, clientId, revisions = new Map(
 // The selection-change machinery, per RESOLVED (selection-change
 // semantics): paths never change; when a context's selection value
 // changes, sends suspend, each bound field fetches through
-// apskel.data.get, values seed SILENTLY (initial state — a non-silent
-// seed would fire the autosave watcher and write the fetch back out), the
-// row's revision is adopted, sends resume. Stale fetches (selection moved
-// again mid-flight) are discarded by generation.
+// apskel.data.get, and the values apply through the SERVER-ORIGIN door —
+// display watchers repaint, the origin-suppressed wire watcher stays
+// quiet, nothing echoes back out. (Not store.seed: after mount, a silent
+// seed skips the display watchers too, leaving stale text in the DOM for
+// the next keystroke to autosave into the wrong row.) The row's revision
+// is adopted, sends resume. Stale fetches (selection moved again
+// mid-flight) are discarded by generation.
 export function attachRecordContexts({
   engine,
   store,
@@ -140,7 +143,7 @@ export function attachRecordContexts({
     const gen = ++c.gen;
     const id = store.get(c.recordPath);
     if (emptyId(id)) {
-      for (const b of c.fields) store.seed(b.storePath, undefined);
+      for (const b of c.fields) store.applyServerWrite(b.storePath, undefined);
       return;
     }
     loading.add(c.path);
@@ -149,10 +152,10 @@ export function attachRecordContexts({
         const resp = await call({ type: "apskel.data.get", table: b.table, id, field: b.field });
         if (gen !== c.gen) return; // selection moved again — stale fetch
         if (resp?.ok) {
-          store.seed(b.storePath, resp.value);
+          store.applyServerWrite(b.storePath, resp.value);
           if (resp.revision !== undefined) revisions.set(`${b.table}:${id}`, resp.revision);
         } else {
-          store.seed(b.storePath, undefined);
+          store.applyServerWrite(b.storePath, undefined);
           log.warn?.(`[apskel] could not load ${b.table} row ${id} ${b.field}:`, resp?.error);
         }
       }

@@ -427,9 +427,11 @@ by the auth machinery, per RESOLVED (identity store region).
 ### Selection-change machinery
 
 * Changing the selection field: sends for that context suspend, each bound
-  field fetches via `apskel.data.get`, values seed **silently** (the wire
-  watcher's fireCount is unchanged — no autosave echo of the fetch), the
-  row's revision is adopted, sends resume.
+  field fetches via `apskel.data.get`, values apply through the
+  **server-origin door** — display watchers repaint (the DOM must show the
+  new row; a silent seed here was the cross-bleed bug verification caught)
+  while the wire watcher's fireCount is unchanged (no autosave echo of the
+  fetch) — the row's revision is adopted, sends resume.
 * A user keystroke during the loading window is discarded with a console
   warning, never sent.
 * Writes carry the row id captured at keystroke time, not send time.
