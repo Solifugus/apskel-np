@@ -1862,25 +1862,72 @@ WorkSplicer prerequisites, so they are framework work, not KF-specific work.
 Each carries a sketched default; each deserves a real design pass after the
 slice runs.
 
-DECISION-POINT (record selection / single-record context): the doc binds
-`articleEditor` to `table="article_editions"` but never says **which row**.
-A component bound to a single record needs its row chosen somehow. Sketched
-default: a `record=` attribute whose value is a reference to a key —
-`record="{app.currentEditionId}"` — with selection itself being ordinary
-app-global state that a list row's action sets. (The WorkSplicer sketch
-already leans on this shape with `app.selectedTask`.) Changing the selection
-re-instantiates the component's data context via the same dynamic-insertion
-path as everything else.
+RESOLVED (record selection / single-record context): `record=` takes either
+an **integer literal** (a fixed singleton row — legitimate, e.g. a settings
+row) or a **brace-less reference expression**, the same grammar as `field=`
+and `action=`: `record="app.currentEditionId"`. Any reference form is legal
+and binds at load like every other reference; what varies at runtime is the
+referenced field's *value*. Selection is ordinary app state — set by a
+route, by `apskel.field.set` from a list row's action, or by any watcher.
 
-DECISION-POINT (views, navigation, and routing): the doc has no concept of
-pages. KF needs a landing view, an editor view, article pages, and exposition
-pages — and the last two need **shareable public URLs**, which matters
-enormously for a publishing platform. Sketched default: `visible=` bindings
-handle intra-app view switching (already sketched in WorkSplicer:
-`visible="{app.taskListOpen}"`); a small `<routes>` declaration maps URL
-patterns to app-state assignments (`/article/:id` → sets
-`app.currentArticleId`, shows the article view) so routing is *state
-synchronization with the URL bar*, not a second navigation system.
+RESOLVED (selection-change semantics): **paths never change.** The bound
+component keeps its instance, its watchers, and its DOM; identity is path,
+and the row is context, not identity. When the selection value changes, the
+runtime: suspends sends for that context, fetches the new row through
+`apskel.data.get`, **seeds the fetched values silently** (they are initial
+state — a non-silent seed would fire the autosave watcher and write the
+fetch straight back out), adopts the row's revision, and resumes. Edges,
+decided: a write always targets the row selected *when the keystroke
+happened* (captured at enqueue time, not send time); keystrokes landing
+between selection-change and fetch-arrival are discarded with a console
+warning (queueing them against an unknown revision would be worse); a
+null/undefined selection is an **empty context** — fields read undefined,
+sends are suppressed, and hiding the component is `visible=`'s job.
+
+RESOLVED (`visible=`): a brace-less reference attribute on any component
+instance. The bare form is truthy visibility (`visible="app.taskListOpen"`);
+with the domain syntax — its first consumer, no new grammar —
+`visible="app.view: editor, article"` means visible while the value is in
+the listed set. Hidden is a `display:none` wrapper: instances, state, and
+watchers all survive. Creation and destruction remain the collections
+mechanism's business, never visibility's.
+
+RESOLVED (routes): routing is **state synchronization with the URL bar**,
+not a second navigation system. A `<routes>` section at app level; each
+route carries child `<set>` elements — no assignment mini-language, every
+assignment its own load-validated element:
+
+```xml
+<routes>
+    <route path="/">           <set field="app.view" value="landing"/> </route>
+    <route path="/editor">     <set field="app.view" value="editor"/>  </route>
+    <route path="/article/:id"><set field="app.view" value="article"/>
+                               <set field="app.currentArticleId" param="id"/> </route>
+</routes>
+```
+
+Load-time errors: a `field=` reference that does not resolve, a `param=`
+absent from the route's pattern, any route targeting `app.identity.*`.
+Two-way sync: URL→state at boot (seeded silently — route state is initial
+state) and on back/forward; state→URL by reverse-matching routes **in
+declaration order** (the first route whose assignments match current state
+wins; params substituted; pushState). The value-change guard is what stops
+the loop. An unmatched URL falls back to the first declared route. The
+server serves the app shell for any route path, so deep links work.
+Dependency named honestly: routing makes URLs *shareable*, not *public* —
+anonymous reads await the permissions resolution (`read="public"`), and
+routing must not smuggle that in.
+
+RESOLVED (absolute references reach app-scope locals): `{app.x}` validates
+against the root's children, the `<app>` element's attributes, **and the
+app scope's declared locals** — previously only the first two, a latent gap
+that `app.view` / `app.currentArticleId` expose.
+
+RESOLVED (`apskel.field.set`): a framework function whose **first argument
+is a write target**, not a read — `action="apskel.field.set(app.selectedTask, .id)"`
+assigns the second argument's value to the first's bound field, origin
+`user`. This is how a list row selects a record without routing and without
+bespoke JS; it may not target `app.identity.*`.
 
 DECISION-POINT (permissions/authorization): "permissions/auth context" is
 listed as something components can access, and the offline section explicitly
