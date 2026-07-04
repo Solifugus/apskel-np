@@ -8,22 +8,72 @@
 // Table/column identifiers are validated against the allowlist derived from
 // the app's own resolved bindings — never taken raw from the client. A
 // malformed or unknown message gets a coherent 4xx; the server survives.
+//
+// Phase 7.2: the permission rules from the app's data graph are enforced
+// here — the client honors outcomes, the server is the only enforcement
+// point, per RESOLVED (enforcement is server-side at every Wire door).
+// Reads check the read rule, writes the write rule; `owner` runs the graph
+// walk as one parameterized query; broadcasts are delivered per-connection
+// by the read rule, per RESOLVED (broadcasts obey read rules). Apps
+// without identity stay tokenless and unfiltered — Phase 4 exactly.
 
 import express from "express";
 
-export function attachWire(app, { db, bound, log = console, auth = null }) {
+// Fixed, non-overridable rules for the framework identity tables, per
+// RESOLVED (framework identity tables are Wire-locked). A users row's
+// owner is itself; devices/user_devices have no owner walk, so their
+// read="owner" denies everyone via the unowned-denies floor.
+const IDENTITY_TABLES = new Set(["users", "devices", "user_devices"]);
+const IDENTITY_RULES = { read: "owner", write: "none" };
+
+// The fixed readable column set on users — the app's bindings cannot
+// widen it (never password_hash).
+const IDENTITY_READABLE = new Map([
+  ["users.email", { table: "users", field: "email" }],
+  ["users.display_name", { table: "users", field: "display_name" }],
+]);
+
+const DEFAULT_RULES = { read: "users", write: "users" }; // pre-7.2 behavior
+
+export function attachWire(app, { db, bound, log = console, auth = null, permissions = [] }) {
   const allowlist = new Map(bound.map((b) => [`${b.table}.${b.field}`, b]));
-  const sseClients = new Set();
+  const permByTable = new Map(permissions.map((p) => [p.table, p]));
+  const sseClients = new Set(); // {res, userId}
 
   app.use(express.json());
+
+  function rulesFor(table) {
+    if (IDENTITY_TABLES.has(table)) return IDENTITY_RULES;
+    return permByTable.get(table) ?? DEFAULT_RULES;
+  }
+
+  // The graph walk, per RESOLVED (owner is a graph walk): one parameterized
+  // query joining up the startup-resolved hop columns; the last hop's
+  // column IS the owner id. NULL anywhere (or no chain at all) means
+  // unowned, and unowned denies.
+  async function ownerOf(table, id) {
+    if (table === "users") return id;
+    const hops = permByTable.get(table)?.hops ?? [];
+    if (hops.length === 0 || hops[hops.length - 1].parent !== "users") return null;
+    const last = hops[hops.length - 1];
+    let sql = `SELECT t${hops.length - 1}.${quoteIdent(last.column)} AS owner FROM ${quoteIdent(table)} t0`;
+    for (let i = 0; i < hops.length - 1; i++) {
+      sql += ` JOIN ${quoteIdent(hops[i].parent)} t${i + 1}` +
+        ` ON t${i}.${quoteIdent(hops[i].column)} = t${i + 1}.id`;
+    }
+    sql += ` WHERE t0.id = $1`;
+    const result = await db.query(sql, [id]);
+    return result.rows.length > 0 ? result.rows[0].owner : null;
+  }
 
   const handlers = {
     // Auth wire types (register/login/token) when the app uses identity.
     ...(auth ? auth.handlers : {}),
 
     "apskel.data.set": async (envelope, req, res) => {
-      const b = guardData(envelope, req, res);
-      if (!b) return;
+      const g = await guardData(envelope, req, res, "write");
+      if (!g) return;
+      const b = g.b;
       const { table, id, field, value, sourceClient } = envelope;
 
       if (b.conflict === "detect") {
@@ -55,7 +105,7 @@ export function attachWire(app, { db, bound, log = console, auth = null }) {
             currentRevision: current.rows[0].revision,
           });
         }
-        broadcast({
+        await broadcastAccepted(g, {
           type: "apskel.data.changed",
           path: b.path,
           table,
@@ -75,7 +125,7 @@ export function attachWire(app, { db, bound, log = console, auth = null }) {
       if (result.rowCount === 0) {
         return res.status(404).json({ ok: false, error: `no ${table} row with id ${id}` });
       }
-      broadcast({
+      await broadcastAccepted(g, {
         type: "apskel.data.changed",
         path: b.path,
         table,
@@ -90,8 +140,9 @@ export function attachWire(app, { db, bound, log = console, auth = null }) {
     // The read counterpart, per RESOLVED (reads through the Wire): same
     // allowlist, value plus current revision for detect contexts.
     "apskel.data.get": async (envelope, req, res) => {
-      const b = guardData(envelope, req, res);
-      if (!b) return;
+      const g = await guardData(envelope, req, res, "read");
+      if (!g) return;
+      const b = g.b;
       const { table, id, field } = envelope;
       const columns =
         b.conflict === "detect" ? `${quoteIdent(field)} AS value, revision` : `${quoteIdent(field)} AS value`;
@@ -107,17 +158,46 @@ export function attachWire(app, { db, bound, log = console, auth = null }) {
     },
   };
 
-  // Shared guard for the data types: token (when identity is attached, per
-  // RESOLVED (token transport) — apps without auth stay tokenless as in
-  // Phase 4), allowlist, and a concrete row id. Returns the binding or
-  // null after answering.
-  function guardData(envelope, req, res) {
-    if (auth && !auth.identity(req)) {
-      res.status(401).json({ ok: false, error: "authentication required" });
+  // Shared guard for the data types. Without identity attached the app is
+  // tokenless end to end (Phase 4 exactly). With identity: the table's
+  // rule for this direction decides — none is 403 outright, public needs
+  // no token, users/owner need identity (401 without), owner additionally
+  // runs the graph walk (403 on mismatch or unowned). Allowlist and id
+  // checks sit between, so unknown fields stay 400. Returns {b, identity,
+  // ownerUserId} or null after answering.
+  async function guardData(envelope, req, res, mode) {
+    const { table, id, field } = envelope;
+
+    if (!auth) {
+      const b = allowlist.get(`${table}.${field}`);
+      if (!b) {
+        res.status(400).json({ ok: false, error: `no bound field '${table}.${field}' in this app` });
+        return null;
+      }
+      if (id === undefined || id === null) {
+        res.status(400).json({ ok: false, error: "missing id" });
+        return null;
+      }
+      return { b, identity: null, ownerUserId: null };
+    }
+
+    const rules = rulesFor(table);
+    const rule = mode === "read" ? rules.read : rules.write;
+    if (rule === "none") {
+      res.status(403).json({ ok: false, error: `${mode} on ${table} is not allowed over the wire` });
       return null;
     }
-    const { table, id, field } = envelope;
-    const b = allowlist.get(`${table}.${field}`);
+    let identity = null;
+    if (rule !== "public") {
+      identity = auth.identity(req);
+      if (!identity) {
+        res.status(401).json({ ok: false, error: "authentication required" });
+        return null;
+      }
+    }
+    const b =
+      allowlist.get(`${table}.${field}`) ??
+      (mode === "read" ? IDENTITY_READABLE.get(`${table}.${field}`) : undefined);
     if (!b) {
       res.status(400).json({ ok: false, error: `no bound field '${table}.${field}' in this app` });
       return null;
@@ -126,7 +206,30 @@ export function attachWire(app, { db, bound, log = console, auth = null }) {
       res.status(400).json({ ok: false, error: "missing id" });
       return null;
     }
-    return b;
+    let ownerUserId = null;
+    if (rule === "owner") {
+      ownerUserId = await ownerOf(table, id);
+      if (ownerUserId === null || String(ownerUserId) !== String(identity.userId)) {
+        res.status(403).json({ ok: false, error: `${mode} on ${table} requires owner` });
+        return null;
+      }
+    }
+    return { b, identity, ownerUserId };
+  }
+
+  // An accepted write broadcasts scoped by the table's READ rule — who may
+  // read decides who may watch. The owner id is computed at most once per
+  // write: reused from the guard when the write rule already walked it.
+  async function broadcastAccepted(g, envelope) {
+    let scope = null;
+    if (auth) {
+      const rules = rulesFor(envelope.table);
+      scope = { read: rules.read, ownerUserId: null };
+      if (rules.read === "owner") {
+        scope.ownerUserId = g.ownerUserId ?? (await ownerOf(envelope.table, envelope.id));
+      }
+    }
+    broadcast(envelope, scope);
   }
 
   app.post("/wire", async (req, res) => {
@@ -146,6 +249,10 @@ export function attachWire(app, { db, bound, log = console, auth = null }) {
     }
   });
 
+  // EventSource cannot set headers, so the token rides the query string;
+  // identity is verified at connect and stamped on the connection, per
+  // RESOLVED (broadcasts obey read rules) — including its recorded
+  // tradeoff: connect-time identity persists until reconnect.
   app.get("/events", (req, res) => {
     res.set({
       "Content-Type": "text/event-stream",
@@ -154,8 +261,10 @@ export function attachWire(app, { db, bound, log = console, auth = null }) {
     });
     res.flushHeaders();
     res.write(": connected\n\n");
-    sseClients.add(res);
-    req.on("close", () => sseClients.delete(res));
+    const ident = auth ? auth.verifyToken(req.query?.token) : null;
+    const client = { res, userId: ident ? ident.userId : null };
+    sseClients.add(client);
+    req.on("close", () => sseClients.delete(client));
   });
 
   // Body-parse failures (malformed JSON) and anything else uncaught get a
@@ -168,12 +277,78 @@ export function attachWire(app, { db, bound, log = console, auth = null }) {
     if (!res.headersSent) res.status(500).json({ ok: false, error: "internal error" });
   });
 
-  function broadcast(envelope) {
+  function broadcast(envelope, scope = null) {
     const frame = `data: ${JSON.stringify(envelope)}\n\n`;
-    for (const client of sseClients) client.write(frame);
+    for (const client of sseClients) {
+      if (scope) {
+        if (scope.read === "users" && client.userId == null) continue;
+        if (
+          scope.read === "owner" &&
+          (scope.ownerUserId == null ||
+            client.userId == null ||
+            String(client.userId) !== String(scope.ownerUserId))
+        ) {
+          continue;
+        }
+      }
+      client.res.write(frame);
+    }
   }
 
   return { broadcast, sseClients };
+}
+
+// Startup resolution of the owner-walk FK columns against the live schema,
+// per RESOLVED (owner is a graph walk): the XML never names columns. Zero
+// candidate FKs or an unresolved ambiguity is a startup error naming the
+// candidates; via= (recorded by the loader) picks among them. Mutates each
+// hop in place, adding .column.
+export async function resolvePermissionColumns(db, permissions) {
+  const cache = new Map();
+  for (const p of permissions) {
+    for (const hop of p.hops) {
+      const key = `${hop.child}->${hop.parent}:${hop.via ?? ""}`;
+      if (!cache.has(key)) cache.set(key, await resolveHopColumn(db, hop));
+      hop.column = cache.get(key);
+    }
+  }
+  return permissions;
+}
+
+async function resolveHopColumn(db, hop) {
+  const result = await db.query(
+    `SELECT DISTINCT kcu.column_name
+       FROM information_schema.table_constraints tc
+       JOIN information_schema.key_column_usage kcu
+         ON kcu.constraint_name = tc.constraint_name
+        AND kcu.constraint_schema = tc.constraint_schema
+       JOIN information_schema.constraint_column_usage ccu
+         ON ccu.constraint_name = tc.constraint_name
+        AND ccu.constraint_schema = tc.constraint_schema
+      WHERE tc.constraint_type = 'FOREIGN KEY'
+        AND tc.table_name = $1 AND ccu.table_name = $2`,
+    [hop.child, hop.parent]
+  );
+  const candidates = result.rows.map((r) => r.column_name);
+  if (hop.via) {
+    if (!candidates.includes(hop.via)) {
+      throw new Error(
+        `via='${hop.via}' on ${hop.child} is not a foreign key to ${hop.parent}` +
+          (candidates.length ? ` (candidates: ${candidates.join(", ")})` : "")
+      );
+    }
+    return hop.via;
+  }
+  if (candidates.length === 0) {
+    throw new Error(`no foreign key from ${hop.child} to ${hop.parent} — the owner walk needs one`);
+  }
+  if (candidates.length > 1) {
+    throw new Error(
+      `ambiguous foreign keys from ${hop.child} to ${hop.parent}: ${candidates.join(", ")} — ` +
+        `disambiguate with via= on the <${hop.child}> graph node`
+    );
+  }
+  return candidates[0];
 }
 
 function quoteIdent(ident) {

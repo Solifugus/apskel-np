@@ -139,6 +139,19 @@ export function collectBoundFields(root) {
   return [...byStorePath.values()];
 }
 
+// The per-table permission rules declared on the data graph, per RESOLVED
+// (permission rules live on the data graph). Plain data: the server
+// resolves hop columns against the live schema at startup and enforces;
+// the bundle may carry it for inspection, the client never enforces.
+export function collectPermissions(root) {
+  return (root.data?.permissions ?? []).map((p) => ({
+    table: p.table,
+    read: p.read,
+    write: p.write,
+    hops: p.hops.map((h) => ({ ...h })),
+  }));
+}
+
 export function findByPath(root, targetPath) {
   if (targetPath === "app") return root;
   let cur = root;

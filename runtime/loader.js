@@ -16,8 +16,10 @@
 //   * field= on an input primitive is a reference expression WITHOUT braces,
 //     per the design examples (<input field=".title"/>).
 //
-// <data> and <server> sections, and <watchers>/<functions>/<style> blocks
-// inside composites, are ignored until their phases.
+// <server> sections, and <watchers>/<functions>/<style> blocks inside
+// composites, are ignored until their phases. <data> is parsed since Phase
+// 7.2: its <graph> nodes carry the permission rules, per RESOLVED
+// (permission rules live on the data graph).
 
 import fs from "node:fs";
 import path from "node:path";
@@ -40,6 +42,21 @@ const DEFERRED_SECTION_TAGS = new Set(["watchers", "functions", "style"]);
 // The closed conflict-policy menu, per RESOLVED (conflict declaration
 // surface). Declared on the data-context element (the one with table=).
 const CONFLICT_MENU = new Set(["offline-readonly", "detect", "lww"]);
+
+// The closed permission menus, per RESOLVED (permission rules live on the
+// data graph). They differ by direction on purpose: there is no anonymous
+// write.
+const READ_MENU = new Set(["public", "users", "owner"]);
+const WRITE_MENU = new Set(["users", "owner", "none"]);
+
+// Rules on the framework identity tables are fixed (read="owner",
+// write="none") and not overridable, per RESOLVED (framework identity
+// tables are Wire-locked).
+const IDENTITY_TABLES = new Set(["users", "devices", "user_devices"]);
+
+// Graph node tags become SQL identifiers on the server; anything else
+// never gets near the wire.
+const SQL_IDENT = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
 
 const REF_PATTERN = /\{[^{}]+\}/g;
 
@@ -173,6 +190,9 @@ export function loadApp(appXmlPath, options = {}) {
   const routesEl = rawRoot.children.find((c) => c.tag === "routes");
   root.routes = routesEl ? buildRoutes(routesEl, root, ctx) : [];
 
+  const dataEl = rawRoot.children.find((c) => c.tag === "data");
+  root.data = dataEl ? buildData(dataEl) : { permissions: [] };
+
   root.allRefs = ctx.allRefs;
   root.appWideNames = ctx.appWideNames;
   return root;
@@ -228,6 +248,121 @@ function buildRoutes(routesEl, root, ctx) {
     routes.push({ path: pattern, params, sets, file: routeEl.file, line: routeEl.line });
   }
   return routes;
+}
+
+// <data> at app level: <graph> elements whose nested table nodes carry the
+// permission rules. The loader validates the closed menus, the one-
+// declaration-site rule, the identity-table lock, and that every owner
+// rule has a graph path to users; it records via= where written. FK
+// COLUMNS are deliberately absent here — resolving them needs the live
+// schema and is server startup's job.
+function buildData(dataEl) {
+  const permissions = [];
+  const declaredAt = new Map(); // table -> {file, line} of its rule-bearing node
+
+  for (const graphEl of dataEl.children) {
+    if (!graphEl.tag) continue;
+    const at = { file: graphEl.file, line: graphEl.line };
+    if (graphEl.tag !== "graph") {
+      throw new ApskelLoadError(`<data> may contain only <graph>, found <${graphEl.tag}>`, at);
+    }
+    for (const child of graphEl.children) {
+      if (child.tag) walkGraphNode(child, []);
+    }
+  }
+  return { permissions };
+
+  // ancestors: [{table, via}] from the immediate parent up to the graph root.
+  function walkGraphNode(el, ancestors) {
+    const at = { file: el.file, line: el.line };
+    if (!SQL_IDENT.test(el.tag)) {
+      throw new ApskelLoadError(`graph node <${el.tag}> is not a valid table name`, at);
+    }
+    for (const key of Object.keys(el.attrs)) {
+      if (key !== "read" && key !== "write" && key !== "via") {
+        throw new ApskelLoadError(
+          `unknown attribute '${key}' on graph node <${el.tag}> — graph nodes take ` +
+            `read=, write=, via=`,
+          at
+        );
+      }
+    }
+    const via = el.attrs.via;
+    if (via !== undefined && !SQL_IDENT.test(via)) {
+      throw new ApskelLoadError(`via='${via}' on <${el.tag}> is not a valid column name`, at);
+    }
+    const { read, write } = el.attrs;
+
+    if (read !== undefined || write !== undefined) {
+      if (IDENTITY_TABLES.has(el.tag)) {
+        throw new ApskelLoadError(
+          `permission rules on identity table <${el.tag}> — identity tables are fixed at ` +
+            `read="owner" write="none" and not overridable, per RESOLVED (framework ` +
+            `identity tables are Wire-locked)`,
+          at
+        );
+      }
+      if (read !== undefined && !READ_MENU.has(read)) {
+        throw new ApskelLoadError(
+          `unknown read rule '${read}' on <${el.tag}> — the closed menu is: ` +
+            `${[...READ_MENU].join(", ")}`,
+          at
+        );
+      }
+      if (write !== undefined && !WRITE_MENU.has(write)) {
+        throw new ApskelLoadError(
+          `unknown write rule '${write}' on <${el.tag}> — the closed menu is: ` +
+            `${[...WRITE_MENU].join(", ")}`,
+          at
+        );
+      }
+      const prior = declaredAt.get(el.tag);
+      if (prior) {
+        throw new ApskelLoadError(
+          `permission rules for '${el.tag}' declared twice (already at ` +
+            `${prior.file}:${prior.line}) — a table's rules live on at most one node ` +
+            `across all graphs`,
+          at
+        );
+      }
+      declaredAt.set(el.tag, at);
+
+      // The ancestor path to users, innermost first; the hop's via is the
+      // CHILD side's attribute (the FK column lives in the child).
+      const hops = [];
+      let childTable = el.tag;
+      let childVia = via;
+      let found = false;
+      for (const anc of ancestors) {
+        hops.push({ child: childTable, parent: anc.table, via: childVia ?? null });
+        if (anc.table === "users") {
+          found = true;
+          break;
+        }
+        childTable = anc.table;
+        childVia = anc.via;
+      }
+      const effRead = read ?? "users";
+      const effWrite = write ?? "users";
+      if ((effRead === "owner" || effWrite === "owner") && !found) {
+        throw new ApskelLoadError(
+          `<${el.tag}> declares an 'owner' rule but has no 'users' ancestor in its ` +
+            `graph — owner is a graph walk, per RESOLVED (owner is a graph walk)`,
+          at
+        );
+      }
+      permissions.push({
+        table: el.tag,
+        read: effRead,
+        write: effWrite,
+        hops: found ? hops : [],
+      });
+    }
+
+    for (const child of el.children) {
+      if (child.tag) walkGraphNode(child, [{ table: el.tag, via }, ...ancestors]);
+    }
+  }
 }
 
 function findCompositeFile(type, ctx) {

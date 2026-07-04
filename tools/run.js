@@ -18,9 +18,14 @@ import path from "node:path";
 import pg from "pg";
 import { loadApp, ApskelLoadError } from "../runtime/loader.js";
 import { resolveReferences } from "../runtime/pathResolver.js";
-import { serializeApp, collectBoundFields, collectUsesAuth } from "../runtime/serialize.js";
+import {
+  serializeApp,
+  collectBoundFields,
+  collectUsesAuth,
+  collectPermissions,
+} from "../runtime/serialize.js";
 import { createAppServer, attachShellFallback } from "../server/appServer.js";
-import { attachWire } from "../server/wireServer.js";
+import { attachWire, resolvePermissionColumns } from "../server/wireServer.js";
 import { createAuth } from "../server/authServer.js";
 import { fileURLToPath } from "node:url";
 
@@ -41,15 +46,18 @@ let root;
 let baseBundle;
 let bound;
 let usesAuth;
+let permissions;
 try {
   root = resolveReferences(loadApp(path.join(appDir, "app.xml")));
   bound = collectBoundFields(root);
   usesAuth = collectUsesAuth(root);
+  permissions = collectPermissions(root);
   baseBundle = serializeApp(root, {
     title: root.attrs.title ?? "Apskel App",
     style: root.clientAttrs.style ?? null,
     clientFunctions: root.clientAttrs.functions ?? null,
     bound,
+    permissions,
     wire: { endpoint: "/wire", events: "/events" },
     auth: usesAuth,
   });
@@ -108,13 +116,33 @@ if (fs.existsSync(schemaFile)) {
   console.log(`applied ${schemaFile}`);
 }
 
+// The owner-walk FK columns come from the live schema, never the XML —
+// ambiguity is a startup error naming the candidates, per RESOLVED (owner
+// is a graph walk).
+try {
+  await resolvePermissionColumns(db, permissions);
+} catch (e) {
+  console.error(`PERMISSIONS ERROR: ${e.message}`);
+  process.exit(1);
+}
+
 // --- serve -----------------------------------------------------------------
+
+// /app.json is fetched before authentication, so initialData is a Wire
+// door too: with identity attached, only read="public" tables ship rows —
+// everything else boots empty and fetches through apskel.data.get once a
+// token exists, per RESOLVED (enforcement is server-side at every Wire
+// door).
+const publicRead = new Set(
+  permissions.filter((p) => p.read === "public").map((p) => p.table)
+);
 
 async function fetchInitialData() {
   const initialData = {};
   const revisions = {};
   for (const b of bound) {
     if (b.record === null || b.record === undefined) continue; // no row chosen (Phase 7 territory)
+    if (usesAuth && !publicRead.has(b.table)) continue; // non-public: fetched post-login
     const columns = b.conflict === "detect" ? `"${b.field}" AS value, revision` : `"${b.field}" AS value`;
     const result = await db.query(`SELECT ${columns} FROM "${b.table}" WHERE id = $1`, [b.record]);
     if (result.rows.length > 0) {
@@ -129,7 +157,7 @@ const app = createAppServer({
   appDir,
   bundleProvider: async () => ({ ...baseBundle, ...(await fetchInitialData()) }),
 });
-attachWire(app, { db, bound, auth });
+attachWire(app, { db, bound, auth, permissions });
 attachShellFallback(app); // deep links: /edit/2 serves the shell — last, so /wire and /events win
 
 app.listen(port, () => {

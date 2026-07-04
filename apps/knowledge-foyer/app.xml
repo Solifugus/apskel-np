@@ -1,4 +1,4 @@
-<app title="Knowledge Foyer" version="0.2">
+<app title="Knowledge Foyer" version="0.3">
 
     <client style="style.css">
 
@@ -46,5 +46,15 @@
             <set field="app.currentEditionId" param="id"/>
         </route>
     </routes>
+
+    <data>
+        <graph name="knowledge">
+            <users>
+                <articles read="public" write="owner">
+                    <article_editions read="public" write="owner"/>
+                </articles>
+            </users>
+        </graph>
+    </data>
 
 </app>

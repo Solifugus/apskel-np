@@ -122,33 +122,50 @@ export function attachWireReceive({ store, bound, clientId, revisions = new Map(
 // the next keystroke to autosave into the wrong row.) The row's revision
 // is adopted, sends resume. Stale fetches (selection moved again
 // mid-flight) are discarded by generation.
+//
+// Phase 7.2: fixed-record contexts join the same machinery, minus the
+// selection watcher (their row never changes). A non-public table ships
+// no initialData (the bundle is a Wire door too), so its context boots
+// empty, fetches here, and refetchAll() after login fills it. skipInitial
+// lists store paths the bundle already seeded — no redundant boot fetch.
 export function attachRecordContexts({
   engine,
   store,
   bound,
   revisions = new Map(),
   call,
+  skipInitial = new Set(),
   log = console,
 }) {
-  const contexts = new Map(); // context path -> {recordPath, fields, gen}
+  const contexts = new Map(); // context path -> {recordPath|fixedId, fields, gen}
   for (const b of bound) {
-    if (!b.recordPath) continue;
-    const c = contexts.get(b.path) ?? { path: b.path, recordPath: b.recordPath, fields: [], gen: 0 };
+    if (!b.recordPath && (b.record === null || b.record === undefined)) continue;
+    const c =
+      contexts.get(b.path) ??
+      {
+        path: b.path,
+        recordPath: b.recordPath ?? null,
+        fixedId: b.recordPath ? null : b.record,
+        fields: [],
+        gen: 0,
+      };
     c.fields.push(b);
     contexts.set(b.path, c);
   }
   const loading = new Set();
 
-  async function loadContext(c) {
+  async function loadContext(c, { skip } = {}) {
     const gen = ++c.gen;
-    const id = store.get(c.recordPath);
+    const id = c.recordPath ? store.get(c.recordPath) : c.fixedId;
     if (emptyId(id)) {
       for (const b of c.fields) store.applyServerWrite(b.storePath, undefined);
       return;
     }
+    const fields = skip ? c.fields.filter((b) => !skip.has(b.storePath)) : c.fields;
+    if (fields.length === 0) return;
     loading.add(c.path);
     try {
-      for (const b of c.fields) {
+      for (const b of fields) {
         const resp = await call({ type: "apskel.data.get", table: b.table, id, field: b.field });
         if (gen !== c.gen) return; // selection moved again — stale fetch
         if (resp?.ok) {
@@ -166,14 +183,18 @@ export function attachRecordContexts({
 
   const all = [];
   for (const c of contexts.values()) {
-    engine.watch({
-      name: `record:${c.path}`,
-      fields: [c.recordPath],
-      run: () => {
-        loadContext(c);
-      },
-    });
-    all.push(loadContext(c)); // initial fetch (deep links: the route seeded silently)
+    if (c.recordPath) {
+      engine.watch({
+        name: `record:${c.path}`,
+        fields: [c.recordPath],
+        run: () => {
+          loadContext(c);
+        },
+      });
+    }
+    // Initial fetch (deep links: the route seeded silently); bundle-seeded
+    // fields are skipped.
+    all.push(loadContext(c, { skip: skipInitial }));
   }
 
   return {

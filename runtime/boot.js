@@ -51,6 +51,7 @@ let token = null;
 let functions = {};
 let credentials = null;
 let recordContexts = null; // assigned below; onToken refetches through it
+let reconnectEvents = () => {}; // assigned below; onToken re-identifies the SSE feed
 
 const postWire = (envelope) =>
   fetch(bundle.wire?.endpoint ?? "/wire", {
@@ -85,8 +86,11 @@ if (bundle.auth) {
 
   const onToken = (t) => {
     token = t;
-    // A fresh login can unlock rows the anonymous boot could not read.
+    // A fresh login can unlock rows the anonymous boot could not read —
+    // and the SSE connection's identity is stamped at connect, so it must
+    // reconnect to start receiving users/owner-scoped broadcasts.
     recordContexts?.refetchAll();
+    reconnectEvents();
   };
 
   functions = createFrameworkFunctions({ call, store, credentials, onToken });
@@ -148,9 +152,18 @@ if (bundle.wire) {
   const revisions = new Map(Object.entries(bundle.revisions ?? {}));
   window.__apskel.revisions = revisions;
 
-  // Dynamic-record contexts: fetch the selected row now (deep links — the
-  // router already seeded the selection), refetch on selection changes.
-  recordContexts = attachRecordContexts({ engine, store, bound: bundle.bound, revisions, call });
+  // Record contexts: fetch the selected row now (deep links — the router
+  // already seeded the selection; fixed-record contexts of non-public
+  // tables ship no initialData and fetch here too), refetch on selection
+  // changes and on login. Bundle-seeded fields skip the boot fetch.
+  recordContexts = attachRecordContexts({
+    engine,
+    store,
+    bound: bundle.bound,
+    revisions,
+    call,
+    skipInitial: new Set(Object.keys(bundle.initialData ?? {})),
+  });
 
   attachWireSend({
     engine,
@@ -170,6 +183,14 @@ if (bundle.wire) {
             r = await postWire(envelope);
           }
         }
+        if (r.status === 403) {
+          // Forbidden by a permission rule: the server enforces, the
+          // client honors — a warning, never a retry (unlike 401's
+          // silent re-mint above).
+          const body = await r.json().catch(() => null);
+          console.warn("[apskel] write forbidden:", body?.error ?? r.status, envelope);
+          return;
+        }
         if (r.status === 409) {
           // Revision mismatch (conflict=detect): v0.1 logs, no prompt.
           // Adopt the server's revision so the next write recovers.
@@ -187,8 +208,17 @@ if (bundle.wire) {
     },
   });
   const handleEvent = attachWireReceive({ store, bound: bundle.bound, clientId, revisions });
-  const events = new EventSource(bundle.wire.events);
-  events.onmessage = (e) => handleEvent(JSON.parse(e.data));
+  // EventSource cannot set headers: the token rides the query string, and
+  // the connection's identity is fixed at connect — so a token change
+  // (login) reconnects, per RESOLVED (broadcasts obey read rules).
+  let events = null;
+  reconnectEvents = () => {
+    events?.close();
+    const url = bundle.wire.events + (token ? `?token=${encodeURIComponent(token)}` : "");
+    events = new EventSource(url);
+    events.onmessage = (e) => handleEvent(JSON.parse(e.data));
+  };
+  reconnectEvents();
   window.__apskel.clientId = clientId;
 }
 

@@ -228,7 +228,10 @@ console.log("\nserver — guarded updates, 409 with current revision, data.get")
       body: JSON.stringify(body),
     });
 
-  const sse = await fetch(`${base}/events`);
+  // Phase 7.2: with identity attached, the default read rule is 'users' —
+  // an anonymous SSE connection no longer hears this broadcast, so the
+  // listener identifies itself the way a real client now does.
+  const sse = await fetch(`${base}/events?token=${encodeURIComponent(token)}`);
   const reader = sse.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
