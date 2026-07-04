@@ -358,3 +358,84 @@ envelopes).
 `applyServerWrite` to a bound field fires the display watchers but NOT the
 wire send watcher (its count is unchanged — echo suppression made
 observable; in the browser this is read through `window.__apskel`).
+
+---
+
+## Phase 7.1 — Record Selection, Views, and Routing
+
+Asserted by `test/nav.test.js`, DB-free (fake `call` for fetches, fake
+location/history for the router); the browser behavior is personal
+verification against knowledge-foyer v0.2. Fixtures and expected outcomes:
+
+### record-ref/ — must load successfully
+
+`record="app.currentEditionId"` is a brace-less reference (bound at load);
+`record="1"` stays a fixed row. Bound metadata carries `record: 1` for the
+fixed context and `recordPath: "app.currentEditionId"` for the dynamic one.
+
+### visible-domain/ — must load successfully
+
+Three visibility forms: `visible="app.view: landing"` (single-value
+domain), `visible="app.view: editor, article"` (set membership), and
+`visible="app.panelOpen"` (bare = truthy). Serialized nodes carry
+`visible: {storePath, domain}` — domain null for the bare form, the parsed
+value list otherwise.
+
+### app-local-absolute/ — must load successfully
+
+`{app.view}` referenced from a nested layout resolves to the app-scope
+declared local `{view = "landing"}` — previously a load error (absolute
+references validated root fields against `<app>` attributes only), per
+RESOLVED (absolute references reach app-scope locals).
+
+### fail-record-braces/ — must fail at load
+
+`record="{app.currentId}"` — like `field=` and `action=`, `record=` takes
+a bare reference expression without braces.
+
+### fail-route-field/ — must fail at load
+
+A route `<set field="app.nosuch" .../>` targeting a field that resolves to
+nothing — same error class as any unresolved absolute reference, naming
+the route's site.
+
+### fail-route-param/ — must fail at load
+
+`<set param="id"/>` under `path="/editor"`, which declares no `:id` —
+load-time error naming the route and the missing parameter.
+
+### fail-route-identity/ — must fail at load
+
+A route targeting `app.identity.*` — the identity region is written only
+by the auth machinery, per RESOLVED (identity store region).
+
+### Router (fake location/history)
+
+* Boot: the initial URL's route applies **silently** (route state is
+  initial state; no watcher fires); `:id`-style params that are all digits
+  arrive as numbers.
+* An unmatched URL applies the first declared route and corrects the URL
+  via replaceState.
+* State→URL: after a state change, routes reverse-match in declaration
+  order — the first route whose `value=` assignments equal current state
+  wins; `param=` fields substitute into the path; pushState only when the
+  path actually changes (the loop-breaker).
+* popstate applies the URL's route non-silently (watchers fire; views
+  switch).
+* `apskel.nav.go(path)` = applyUrl + pushState, exactly as typing the URL.
+
+### Selection-change machinery
+
+* Changing the selection field: sends for that context suspend, each bound
+  field fetches via `apskel.data.get`, values seed **silently** (the wire
+  watcher's fireCount is unchanged — no autosave echo of the fetch), the
+  row's revision is adopted, sends resume.
+* A user keystroke during the loading window is discarded with a console
+  warning, never sent.
+* Writes carry the row id captured at keystroke time, not send time.
+* Null/empty selection: fields seed undefined, sends are suppressed.
+* Receive with a dynamic record: a broadcast for the currently selected
+  row applies; a broadcast for a different row of the same table is
+  ignored as unbound.
+* `apskel.field.set(target, value)`: assigns with origin `user`; the first
+  argument must be a reference (a literal there is a load-time error).

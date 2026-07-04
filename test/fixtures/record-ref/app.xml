@@ -1,0 +1,17 @@
+<app title="Record Reference" version="0.1">
+
+    <client>
+
+        {currentEditionId = ""}
+
+        <editor type="layout" orient="vertical" table="article_editions" record="app.currentEditionId" conflict="detect">
+            <titleInput type="text-input" field=".title"/>
+        </editor>
+
+        <fixed type="layout" orient="vertical" table="notes" record="1">
+            <noteInput type="text-input" field=".title"/>
+        </fixed>
+
+    </client>
+
+</app>

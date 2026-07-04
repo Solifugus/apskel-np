@@ -1,0 +1,19 @@
+<app title="Route With Unresolved Field" version="0.1">
+
+    <client>
+
+        {view = "landing"}
+
+        <landing type="layout" orient="vertical" visible="app.view: landing">
+            Landing.
+        </landing>
+
+    </client>
+
+    <routes>
+        <route path="/">
+            <set field="app.nosuch" value="landing"/>
+        </route>
+    </routes>
+
+</app>

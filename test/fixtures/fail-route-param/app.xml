@@ -1,0 +1,21 @@
+<app title="Route With Missing Param" version="0.1">
+
+    <client>
+
+        {view = "landing"}
+        {currentId = ""}
+
+        <landing type="layout" orient="vertical" visible="app.view: landing">
+            Landing.
+        </landing>
+
+    </client>
+
+    <routes>
+        <route path="/editor">
+            <set field="app.view" value="editor"/>
+            <set field="app.currentId" param="id"/>
+        </route>
+    </routes>
+
+</app>

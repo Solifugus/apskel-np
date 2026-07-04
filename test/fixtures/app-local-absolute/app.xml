@@ -1,0 +1,15 @@
+<app title="App-Scope Local by Absolute Reference" version="0.1">
+
+    <client>
+
+        {view = "landing"}
+
+        <outer type="layout" orient="vertical">
+            <inner type="layout" orient="vertical">
+                Current view: {app.view}
+            </inner>
+        </outer>
+
+    </client>
+
+</app>

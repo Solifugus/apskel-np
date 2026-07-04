@@ -198,6 +198,35 @@ Before further building, resolve in the design doc (sketched defaults exist in
 Each session ends with RESOLVED entries in the design doc, then one
 implementation phase per resolution.
 
+## Phase 7.1 — Record Selection, Views, and Routing (implementation)
+
+Implements design session 1 (items 1–2 of the five gaps). Deliverables:
+
+* `record=` as a brace-less reference (integer literal remains legal);
+  selection-change machinery per the RESOLVED entry — suspend sends, fetch
+  via `apskel.data.get`, seed silently, adopt revision, resume; writes
+  target the row selected at keystroke time; null/empty selection is an
+  empty context.
+* `visible=` bare (truthy) and domain (`visible="app.view: editor"`) forms;
+  hidden is a display-none wrapper, instances and state preserved.
+* `<routes>` with load-validated `<set>` children; two-way URL↔state sync
+  (boot and popstate inward, declaration-order reverse match outward); the
+  server serves the shell for any route path.
+* Absolute references reach app-scope declared locals.
+* `apskel.field.set` (write-target first argument) and `apskel.nav.go`.
+* Demo: knowledge-foyer v0.2 — landing/editor/article views, two edition
+  rows, record switching by button and by deep link, no lists.
+
+Do NOT build yet: collections/repetition, `filter=`, `read="public"` or any
+permissions, the offline queue.
+
+Verification (personally): type into draft 1, switch to draft 2 by button,
+switch back — both rows correct in psql, zero cross-bleed; URL bar follows
+selection; back/forward walks it; deep link `/edit/2` opens draft 2 cold;
+`__apskel.fireCounts()` shows the wire watcher NOT firing on a record
+switch; two tabs on different records don't cross-talk while two tabs on
+the same record still sync.
+
 ## Phase 8 — Collection Binding Implementation
 
 Repetition-as-binding per the design doc: template resolved at load, per-row

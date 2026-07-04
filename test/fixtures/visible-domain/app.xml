@@ -1,0 +1,22 @@
+<app title="Visible Domain" version="0.1">
+
+    <client>
+
+        {view = "landing"}
+        {panelOpen = ""}
+
+        <landing type="layout" orient="vertical" visible="app.view: landing">
+            The landing view.
+        </landing>
+
+        <editor type="layout" orient="vertical" visible="app.view: editor, article">
+            Editor or article.
+        </editor>
+
+        <panel type="layout" orient="vertical" visible="app.panelOpen">
+            Truthy visibility.
+        </panel>
+
+    </client>
+
+</app>

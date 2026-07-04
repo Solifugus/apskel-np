@@ -1,0 +1,19 @@
+<app title="Route Targeting Identity" version="0.1">
+
+    <client>
+
+        {view = "landing"}
+
+        <landing type="layout" orient="vertical" visible="app.view: landing">
+            Landing.
+        </landing>
+
+    </client>
+
+    <routes>
+        <route path="/as/:email">
+            <set field="app.identity.email" param="email"/>
+        </route>
+    </routes>
+
+</app>

@@ -1929,6 +1929,13 @@ assigns the second argument's value to the first's bound field, origin
 `user`. This is how a list row selects a record without routing and without
 bespoke JS; it may not target `app.identity.*`.
 
+RESOLVED (`apskel.nav.go`): the deliberate-navigation counterpart —
+`action="apskel.nav.go("/edit/1")"` applies the matched route's assignments
+exactly as typing the URL would, then pushes the URL. `field.set` and
+`nav.go` are the two directions of the same sync: set state and let the URL
+follow, or set the URL and let state follow. Neither is a second navigation
+system.
+
 DECISION-POINT (permissions/authorization): "permissions/auth context" is
 listed as something components can access, and the offline section explicitly
 separates access control from conflict policy — but the access-control axis
