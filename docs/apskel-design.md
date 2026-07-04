@@ -1725,6 +1725,43 @@ access tokens, so it knows who it is offline and across restarts. Wire messages
 rely on this device-authenticated identity rather than carrying auth inline, and
 rather than a server-held cookie session.
 
+RESOLVED (device credential mechanics): the browser generates the credential
+client-side on first boot — a device id (UUID) plus a random 256-bit secret —
+and keeps it durably (localStorage). The server stores only a hash of the
+secret in `devices`. Access tokens are **stateless**: the payload
+(userId, deviceId, expiry) is HMAC-signed with a server-held key and verified
+by recomputation, so there is no token table — the absence of a `sessions`
+table holds by construction, not by omission. Tokens are short-lived; the
+device re-mints silently with its secret, which is what survives a full
+browser restart. Passwords are hashed with scrypt (`node:crypto`; no new
+dependency). v0.1 stopgap: when a device hosts multiple users, a silent
+re-mint identifies the most recently linked user; account switching on a
+shared device is a later design session.
+
+RESOLVED (identity store region): the authenticated identity lives in the
+store under the reserved region `app.identity.*` — `userId`, `email`,
+`displayName`, `status` (`anonymous` / `authenticated`), `error`. Any
+component may read it by absolute reference (`{app.identity.email}`); it is
+written only by the framework auth machinery, the same discipline as the
+`server` origin. `identity` is therefore reserved as a top-level component
+name, alongside the reserved root name `app`.
+
+RESOLVED (token transport): the access token travels as an
+`Authorization: Bearer` header on Wire POSTs — envelopes are unchanged from
+the unauthenticated Wire, keeping auth orthogonal to data. An app that uses
+auth (any `apskel.auth.*` call in its resolved tree) makes `apskel.data.set`
+require a valid token; apps without auth are served exactly as before.
+
+RESOLVED (action grammar): a primitive whose manifest declares
+`"action": true` (the button) takes `action=` as a brace-less reference
+expression, exactly like `field=`, and that expression **must** be a function
+call — `action="apskel.auth.loginUser(email, password)"`. Arguments are bare
+reference expressions or literals, per the `{fn(args)}` grammar, and bind at
+load like every other reference. An unknown function name is a load-time
+error naming the site; in this phase the known names are the framework
+registry (`apskel.auth.*`) — app-defined `<functions>` arrive with their own
+phase.
+
 ---
 
 ## First Vertical Slice
