@@ -1,0 +1,15 @@
+<component name="login">
+
+    {email = ""}
+    {password = ""}
+
+    <form type="layout" orient="vertical">
+        Email:
+        <emailInput type="text-input" field="email" placeholder="you@example.com"/>
+        Password:
+        <passwordInput type="text-input" field="password" kind="password"/>
+        <submit type="button" action="apskel.auth.loginUser(email, password)">Log In</submit>
+        {app.identity.error}
+    </form>
+
+</component>

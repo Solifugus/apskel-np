@@ -11,14 +11,23 @@
 
 import express from "express";
 
-export function attachWire(app, { db, bound, log = console }) {
+export function attachWire(app, { db, bound, log = console, auth = null }) {
   const allowlist = new Map(bound.map((b) => [`${b.table}.${b.field}`, b]));
   const sseClients = new Set();
 
   app.use(express.json());
 
   const handlers = {
-    "apskel.data.set": async (envelope, res) => {
+    // Auth wire types (register/login/token) when the app uses identity.
+    ...(auth ? auth.handlers : {}),
+
+    "apskel.data.set": async (envelope, req, res) => {
+      // With identity attached, data writes require a valid access token —
+      // Authorization: Bearer, per RESOLVED (token transport). Apps without
+      // auth (no apskel.auth.* call anywhere) stay tokenless, as in Phase 4.
+      if (auth && !auth.identity(req)) {
+        return res.status(401).json({ ok: false, error: "authentication required" });
+      }
       const { table, id, field, value, sourceClient } = envelope;
       const b = allowlist.get(`${table}.${field}`);
       if (!b) {
@@ -59,7 +68,7 @@ export function attachWire(app, { db, bound, log = console }) {
       return res.status(400).json({ ok: false, error: `unknown wire type '${envelope.type}'` });
     }
     try {
-      await handler(envelope, res);
+      await handler(envelope, req, res);
     } catch (e) {
       log.error("[apskel] wire handler failed:", e.message);
       if (!res.headersSent) res.status(500).json({ ok: false, error: "internal error" });

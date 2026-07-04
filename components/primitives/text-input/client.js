@@ -5,7 +5,7 @@
 
 export function create(ctx, el) {
   const input = document.createElement("input");
-  input.type = "text";
+  input.type = ctx.attrs.kind === "password" ? "password" : "text";
   input.className = "apskel-text-input-control";
   if (ctx.attrs.placeholder) input.placeholder = ctx.attrs.placeholder;
   if (ctx.attrs.readonly !== undefined) input.readOnly = true;

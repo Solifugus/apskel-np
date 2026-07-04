@@ -209,6 +209,13 @@ function buildInstance(rawEl, parent, scope, ctx, expansionStack) {
       at
     );
   }
+  if (parent.isRoot && rawEl.tag === "identity") {
+    throw new ApskelLoadError(
+      "'identity' is a reserved top-level name — app.identity.* is the framework " +
+        "identity region, per RESOLVED (identity store region)",
+      at
+    );
+  }
   const type = rawEl.attrs.type;
   if (!type) {
     throw new ApskelLoadError(`component instance <${rawEl.tag}> has no type attribute`, at);
@@ -301,6 +308,20 @@ function buildInstance(rawEl, parent, scope, ctx, expansionStack) {
         );
       }
       node.fieldSite = addRefSite(`{${value}}`, rawEl.file, rawEl.line, node, scope, ctx);
+      continue;
+    }
+    // action= mirrors field=: a brace-less reference expression, which the
+    // resolver additionally requires to be a function call.
+    if (node.isPrimitive && node.manifest.action && key === "action") {
+      if (/[{}]/.test(value)) {
+        throw new ApskelLoadError(
+          `action attribute of <${node.name}> takes a bare reference expression ` +
+            `without braces (action="${value}")`,
+          at
+        );
+      }
+      node.actionSite = addRefSite(`{${value}}`, rawEl.file, rawEl.line, node, scope, ctx);
+      node.actionSite.requireFunction = true;
       continue;
     }
     extractValueRefs(value, rawEl.file, rawEl.line, node, scope, ctx);

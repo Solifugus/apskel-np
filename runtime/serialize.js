@@ -34,6 +34,7 @@ function nodeToJson(node, primitiveTypes) {
     attrs: { ...node.attrs },
     manifest: node.manifest ?? null,
     fieldPath: node.fieldSite ? storePathOf(node.fieldSite.binding) : null,
+    action: node.actionSite ? functionToJson(node.actionSite.binding) : null,
     locals: [...node.locals].map(([name, decl]) => [name, decl.default]),
     content: node.content.map((seg) =>
       seg.kind === "ref"
@@ -44,6 +45,30 @@ function nodeToJson(node, primitiveTypes) {
     ),
     children: node.children.map((child) => nodeToJson(child, primitiveTypes)),
   };
+}
+
+// A bound function call, flattened for the browser: the name plus each
+// argument as either a literal value or a resolved store path — invocation
+// needs no runtime lookup, per the bind-at-load rule. (LITERAL defaults are
+// JSON-shaped, so JSON.parse is the whole evaluation.)
+function functionToJson(binding) {
+  return {
+    name: binding.name,
+    args: binding.args.map((a) =>
+      a.kind === "literal"
+        ? { kind: "literal", value: JSON.parse(a.value) }
+        : { kind: "ref", storePath: storePathOf(a.binding) }
+    ),
+  };
+}
+
+// True when the app's resolved tree calls any apskel.auth.* function —
+// the load-time signal that this app uses identity: run.js applies the
+// identity schema and the Wire requires tokens on data writes.
+export function collectUsesAuth(root) {
+  return root.allRefs.some(
+    (s) => s.binding?.kind === "function" && s.binding.name.startsWith("apskel.auth.")
+  );
 }
 
 export function hydrateApp(treeJson) {

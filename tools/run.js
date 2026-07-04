@@ -18,9 +18,11 @@ import path from "node:path";
 import pg from "pg";
 import { loadApp, ApskelLoadError } from "../runtime/loader.js";
 import { resolveReferences } from "../runtime/pathResolver.js";
-import { serializeApp, collectBoundFields } from "../runtime/serialize.js";
+import { serializeApp, collectBoundFields, collectUsesAuth } from "../runtime/serialize.js";
 import { createAppServer } from "../server/appServer.js";
 import { attachWire } from "../server/wireServer.js";
+import { createAuth } from "../server/authServer.js";
+import { fileURLToPath } from "node:url";
 
 const args = process.argv.slice(2);
 const appDirArg = args.find((a) => !a.startsWith("--"));
@@ -38,15 +40,18 @@ const appDir = path.resolve(appDirArg);
 let root;
 let baseBundle;
 let bound;
+let usesAuth;
 try {
   root = resolveReferences(loadApp(path.join(appDir, "app.xml")));
   bound = collectBoundFields(root);
+  usesAuth = collectUsesAuth(root);
   baseBundle = serializeApp(root, {
     title: root.attrs.title ?? "Apskel App",
     style: root.clientAttrs.style ?? null,
     clientFunctions: root.clientAttrs.functions ?? null,
     bound,
     wire: { endpoint: "/wire", events: "/events" },
+    auth: usesAuth,
   });
 } catch (e) {
   if (e instanceof ApskelLoadError) {
@@ -91,6 +96,17 @@ if (fs.existsSync(schemaFile)) {
   console.log(`applied ${schemaFile}`);
 }
 
+// An app that calls apskel.auth.* gets the identity core: the framework
+// tables (users, devices, user_devices — deliberately no sessions table)
+// and token-guarded data writes.
+let auth = null;
+if (usesAuth) {
+  const identitySql = fileURLToPath(new URL("../server/identity.sql", import.meta.url));
+  await db.query(fs.readFileSync(identitySql, "utf8"));
+  console.log(`applied ${identitySql}`);
+  auth = createAuth({ db });
+}
+
 // --- serve -----------------------------------------------------------------
 
 async function fetchInitialData() {
@@ -110,12 +126,13 @@ const app = createAppServer({
   appDir,
   bundleProvider: async () => ({ ...baseBundle, initialData: await fetchInitialData() }),
 });
-attachWire(app, { db, bound });
+attachWire(app, { db, bound, auth });
 
 app.listen(port, () => {
   console.log(`Apskel running ${appDir} with the Wire`);
   console.log(`  http://localhost:${port}/`);
   console.log(`  db: ${dbConfig.database} as ${dbConfig.user}@${dbConfig.host}`);
+  if (auth) console.log(`  identity: device-credential auth on (data writes need a token)`);
 });
 
 // --- ~/.pgpass (standard libpq format: host:port:database:user:password) ---

@@ -18,7 +18,7 @@
                 <longInput type="text-area" field="typed" rows="3"/>
             </longRow>
             <buttonRow type="layout" orient="horizontal">
-                <pressMe type="button" action="demo">Press me (logs the action, no consumer yet)</pressMe>
+                <pressMe type="button">Press me (no action bound; the press logs as unconsumed)</pressMe>
             </buttonRow>
             Mirror line: {shout}
             <padOne type="echo-pad"/>

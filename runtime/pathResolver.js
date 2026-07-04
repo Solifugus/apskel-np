@@ -23,13 +23,21 @@
 //                            wins; matching is by name, never by position.
 //   absolute  {app.x.y}      from the root: segments are consumed as child
 //                            instance names; the remainder is the field path.
-//   function  {fn(a, b)}     classified and its reference arguments resolved;
-//                            function existence is a later phase's concern.
+//   function  {fn(a, b)}     classified, its reference arguments resolved,
+//                            and (since Phase 5) the name validated against
+//                            the framework function registry — unknown
+//                            functions are load-time errors.
 //
 // Field existence on components is NOT validated in Phase 1 — primitives
 // have no manifests yet. Component targets always are.
+//
+// Phase 5: app.identity.* is a reserved framework store region, per
+// RESOLVED (identity store region) — an absolute reference into it binds
+// without any component named 'identity' existing. A site marked
+// requireFunction (the button's action=) must resolve to a function call.
 
 import { ApskelLoadError } from "./loader.js";
+import { FRAMEWORK_FUNCTION_NAMES } from "./frameworkFunctions.js";
 
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
@@ -102,6 +110,13 @@ function resolveSite(site, root) {
     case "function":
       site.binding = resolveFunction(site, expr, root);
       break;
+  }
+  if (site.requireFunction && site.form !== "function") {
+    fail(
+      site,
+      `action= must be a function call — ` +
+        `action="apskel.auth.loginUser(email, password)" — got '${expr}'`
+    );
   }
 }
 
@@ -231,6 +246,11 @@ function resolveUpward(site, expr) {
 
 function resolveAbsolute(site, expr, root) {
   const segs = expr.split(".");
+  // app.identity.* is the reserved framework region — the auth machinery
+  // writes it, anything may read it, and no component may claim the name.
+  if (segs[1] === "identity") {
+    return { kind: "absolute", target: root, targetPath: "app", field: segs.slice(1).join(".") };
+  }
   let cur = root; // segs[0] === 'app'
   let i = 1;
   while (i < segs.length) {
@@ -262,10 +282,18 @@ function resolveFunction(site, expr, root) {
   const m = expr.match(/^([A-Za-z_][A-Za-z0-9_.]*)\((.*)\)$/s);
   if (!m) fail(site, `malformed function call '${expr}'`);
   const [, name, argText] = m;
+  if (!FRAMEWORK_FUNCTION_NAMES.has(name)) {
+    fail(
+      site,
+      `unknown function '${name}' — known framework functions: ` +
+        `${[...FRAMEWORK_FUNCTION_NAMES].join(", ")} (app-defined <functions> are a later phase)`
+    );
+  }
   const args = splitArgs(argText).map((arg) => {
     if (LITERAL.test(arg)) return { kind: "literal", value: arg };
     // A reference argument resolves with the same rules, at the same site.
-    const sub = { ...site, raw: `{${arg}}`, form: null, binding: null };
+    // (requireFunction applies to the call itself, not its arguments.)
+    const sub = { ...site, raw: `{${arg}}`, form: null, binding: null, requireFunction: false };
     resolveSite(sub, root);
     return { kind: "ref", form: sub.form, binding: sub.binding };
   });

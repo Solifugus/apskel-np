@@ -1,0 +1,17 @@
+<component name="register">
+
+    {email = ""}
+    {password = ""}
+    {displayName = ""}
+
+    <form type="layout" orient="vertical">
+        Display name:
+        <nameInput type="text-input" field="displayName" placeholder="how you sign"/>
+        Email:
+        <emailInput type="text-input" field="email" placeholder="you@example.com"/>
+        Password:
+        <passwordInput type="text-input" field="password" kind="password"/>
+        <submit type="button" action="apskel.auth.registerUser(email, password, displayName)">Create Account</submit>
+    </form>
+
+</component>

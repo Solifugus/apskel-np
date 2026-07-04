@@ -216,8 +216,9 @@ the plan). Fixtures and expected outcomes:
 A button with `action="apskel.auth.loginUser(email, password)"` — the
 brace-less function-call reference, per RESOLVED (action grammar). Loads
 with the action bound at load time: function name `apskel.auth.loginUser`,
-both arguments resolved as local reads to store paths `app.panel.email`
-and `app.panel.password`. The serialized node carries
+both arguments resolved as local reads to store paths `app.email` and
+`app.password` (`panel` is a plain layout, not a composite mount, so the
+declarations scope to the app root). The serialized node carries
 `action: { name, args: [{kind: "ref", storePath}, ...] }` so the browser
 invokes without any runtime lookup.
 

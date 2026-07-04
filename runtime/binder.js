@@ -10,7 +10,7 @@
 // The ctx object carries the instance's identity and structural DOM handles
 // (ctx.dom). It never holds field values — the store owns every value.
 
-export function mountApp(root, { store, engine, document, primitives, rootEl }) {
+export function mountApp(root, { store, engine, document, primitives, rootEl, functions = {} }) {
   mountContent(root, rootEl);
   return root;
 
@@ -73,11 +73,27 @@ export function mountApp(root, { store, engine, document, primitives, rootEl }) 
       store.set(node.fieldPath, value, "user");
       return;
     }
-    // No consumer yet (e.g. button actions until the event system lands).
+    if (slot === "action" && node.action) {
+      const fn = functions[node.action.name];
+      if (!fn) {
+        console.debug(`[apskel] no implementation for '${node.action.name}' (${node.path})`);
+        return;
+      }
+      Promise.resolve(fn(...evaluateArgs(node.action.args, store))).catch((e) =>
+        console.error(`[apskel] action ${node.action.name} failed:`, e)
+      );
+      return;
+    }
     console.debug(`[apskel] unconsumed input '${slot}' from ${node.path}:`, value);
   }
 
   function display(value) {
     return value == null ? "" : String(value);
   }
+}
+
+// Argument values at press time: literals pass through, refs read the store
+// through their load-time storePath. Exported for the Node harness.
+export function evaluateArgs(args, store) {
+  return args.map((a) => (a.kind === "literal" ? a.value : store.get(a.storePath)));
 }

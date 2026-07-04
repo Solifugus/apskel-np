@@ -1,5 +1,6 @@
 {
   "type": "button",
   "attributes": ["action"],
-  "input": false
+  "input": false,
+  "action": true
 }
