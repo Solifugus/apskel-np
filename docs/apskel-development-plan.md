@@ -227,6 +227,47 @@ selection; back/forward walks it; deep link `/edit/2` opens draft 2 cold;
 switch; two tabs on different records don't cross-talk while two tabs on
 the same record still sync.
 
+## Phase 7.2 — Permissions (implementation)
+
+Implements design session 2 (item 3 of the five gaps). Deliverables:
+
+* Loader parses `<data><graph>`; permission rules (`read=`/`write=`, closed
+  menus) on graph nodes; load-time validation — bad rule value, a table's
+  rules on more than one node, rules on identity tables, an `owner` rule
+  with no graph path to `users`.
+* Startup FK introspection builds each owner chain from the live schema;
+  ambiguous edges are startup errors naming the candidates (`via=` column
+  attribute disambiguates).
+* Wire enforcement: read rule on `apskel.data.get`, write rule on
+  `apskel.data.set`; 401 (no identity where required) vs 403 (identity but
+  rule unsatisfied, naming table and rule); identity tables fixed at
+  `read="owner" write="none"`.
+* SSE: `/events?token=` identifies the connection at connect; broadcasts
+  delivered per-connection by read rule; owner id stamped internally by the
+  write handler, stripped from the frame. Client reconnects the event feed
+  when its token changes (login/re-mint) so the connection's identity is
+  current.
+* Client: 403 on autosave logs a warning without retry (401 keeps its
+  silent re-mint path).
+* Demo: knowledge-foyer v0.3 — `<data><graph>` with
+  `articles`/`article_editions` at `read="public" write="owner"` (interim:
+  drafts publicly readable until row-state-conditional read lands with
+  named queries).
+
+Do NOT build yet: row-state-conditional read (session 5), INSERT/ownership
+at creation (Phase 8), collections, `filter=`, the offline queue, comment
+tables.
+
+Verification (personally): a logged-out browser opens `/article/1` and sees
+title and body (public read, genuinely shareable URL) and watches live
+edits arrive while the owner types in another window; `curl` a data.set
+with no token → 401; register a second account, its token → 403 naming the
+rule; editing 403s for everyone while `created_by` is NULL (safe floor),
+then a psql UPDATE claims article 1 for your account and editing works
+again — second account still 403; `curl` a data.get on `users` with your
+own id and token → your row, another id → 403, any data.set on `users` →
+403.
+
 ## Phase 8 — Collection Binding Implementation
 
 Repetition-as-binding per the design doc: template resolved at load, per-row

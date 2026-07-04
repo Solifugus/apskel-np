@@ -1780,7 +1780,10 @@ RESOLVED (reads through the Wire): `apskel.data.get` is the read
 counterpart of `apskel.data.set` — same allowlist derived from the app's
 own bindings, returns the value plus the current revision for `detect`
 contexts. With identity attached, both data types require a valid token;
-private drafts are not readable anonymously.
+private drafts are not readable anonymously. (Phase 7.2 refines the blanket
+token requirement into per-table rules — see RESOLVED (permission rules
+live on the data graph); a table declared `read="public"` is readable
+without a token, and everything else keeps exactly this behavior.)
 
 RESOLVED (save policy attribute deferred past v0.1): save policy remains a
 property of the data context per the autosave-vs-explicit resolution, but
@@ -1942,15 +1945,83 @@ exactly as typing the URL would, then pushes the URL. `field.set` and
 follow, or set the URL and let state follow. Neither is a second navigation
 system.
 
-DECISION-POINT (permissions/authorization): "permissions/auth context" is
-listed as something components can access, and the offline section explicitly
-separates access control from conflict policy — but the access-control axis
-itself is undefined. KF needs: public may read published, only the author may
-write their article, only registered users may comment. Enforcement must be
-**server-side on Wire writes** (the client honors it; the server enforces
-it). Sketched default: declarative per-table/per-context rules in the `<data>`
-section (`read="public"`, `write="owner"`), with `owner` derived from the
-graph edge to `users` and the device-authenticated identity.
+RESOLVED (permission rules live on the data graph): the `<data><graph>`
+section — designed from the beginning, parsed by nothing until Phase 7.2 —
+becomes real, and permission rules ride on its nodes, because ownership *is*
+graph traversal:
+
+```xml
+<data>
+    <graph name="knowledge">
+        <users>
+            <articles read="public" write="owner">
+                <article_editions read="public" write="owner"/>
+            </articles>
+        </users>
+    </graph>
+</data>
+```
+
+Closed menus, validated at load exactly like `conflict=`: `read` is one of
+`public` (no token needed), `users` (any authenticated user), `owner`;
+`write` is one of `users`, `owner`, `none`. Defaults for an app that uses
+auth: `read="users" write="users"` — precisely the pre-7.2 behavior, so no
+existing app changes meaning. Apps without `apskel.auth.*` remain tokenless
+end to end (Phase 4 behavior preserved). A table's rule attributes may
+appear on **at most one node across all graphs** — a second declaration is a
+load-time error even if identical; traversal multiplicity is fine,
+permission multiplicity is not.
+
+RESOLVED (owner is a graph walk): `owner` means: walk the declared graph
+from the row's table up parent edges to `users`; the terminal user id must
+equal the token's identity. The FK **columns are never written in the
+XML** — the server introspects them from the live schema at startup
+(`article_editions.article_id → articles`, `articles.created_by → users`);
+two candidate FKs between adjacent nodes is a startup error naming both
+candidates, resolved by a `via="column"` attribute on the child node. A
+`users` row's owner is itself. **NULL anywhere in the chain means unowned,
+and unowned denies** — the safe floor; a row acquires an owner by being
+created by someone (Phase 8's INSERT path) or by explicit SQL until then. A
+table carrying an `owner` rule without a graph path to `users` is a
+load-time error. One parameterized SQL query per guarded operation.
+
+RESOLVED (enforcement is server-side at every Wire door): `apskel.data.get`
+checks the table's read rule and `apskel.data.set` its write rule, before
+the allowlist logic that already exists. Missing/invalid token where the
+rule requires identity → 401 (unchanged shape); authenticated but rule
+unsatisfied → **403 naming the table and rule** (`write on article_editions
+requires owner`). The client honors outcomes — a 403 on autosave logs a
+warning and does not retry (distinct from the 401 silent-re-mint path) — but
+never enforces; the server is the only enforcement point.
+
+RESOLVED (broadcasts obey read rules): an open SSE firehose would make the
+rest theater. `EventSource` cannot set headers, so `/events?token=...`
+carries the token; identity is verified at connect and stamped on the
+connection. Each broadcast is delivered per-connection by the table's read
+rule: `public` → every connection, `users` → identified connections,
+`owner` → only the owner's connections — the write handler computes the
+owner id once (it already touched the row) and stamps it on the internal
+envelope, stripped from the frame before sending. Accepted tradeoff,
+recorded: SSE identity is checked at connect, not per-event; a token
+expiring mid-stream keeps its connection until reconnect — a 15-minute
+exposure ceiling, the same stateless-token philosophy as the REST side.
+Revisit only if revocation ever matters.
+
+RESOLVED (framework identity tables are Wire-locked): `users`, `devices`,
+`user_devices` get fixed, non-overridable rules on the data Wire:
+`read="owner"`, `write="none"` — a user may `apskel.data.get` their own
+row; nobody data-writes identity tables (that is what `apskel.auth.*` is
+for). An app declaring rules on them is a load-time error. Like the absent
+sessions table, this is curl-testable.
+
+DECISION-POINT (row-state-conditional read — recorded, not resolved):
+KF's true rule is "public may read *published*" — conditional on a row's
+state, not its table. That lands in design session 5 as a property of
+**named server-defined queries**: the query (`publishedEditions`) is the
+permission boundary, keeping conditions in server-side SQL rather than
+inventing an XML expression syntax. Until then permissions are per-table
+only, and the KF demo's `read="public"` on `article_editions` deliberately
+exposes drafts in the interim slice.
 
 DECISION-POINT (multi-value fields / many-to-many): an article's tag *set* is
 a join-table relationship, but the field/domain system is single-value. The
