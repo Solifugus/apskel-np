@@ -16,7 +16,8 @@ The working method: implement one phase at a time; every phase ends with verific
 
 - `npm test` — all harnesses; pure Node, no test framework. Individually: `node test/loader.test.js` (Phase 1: loader/resolver), `node test/store.test.js` (Phase 2: store/watchers), `node test/render.test.js` (Phase 3: the Node-testable renderer slice). Expected outcomes per fixture are recorded in `test/fixtures/README.md`.
 - `node tools/load.js <path/to/app.xml> [--dump-tree]` — load an app and resolve all references; `--dump-tree` prints the instantiated tree with each reference site's bound target. Broken fixtures exit 1 with an error naming the reference site.
-- `node tools/serve.js <appDir> [--port 3000]` — Phase 3 static server: resolves the app at startup, serves the bundle at `/app.json` and the runtime as unmodified ESM. Browser debug handle: `window.__apskel` (`store`, `engine`, `root`, `byPath`). Demo app: `apps/uppercase-demo/`.
+- `node tools/serve.js <appDir> [--port 3000]` — Phase 3 static server: resolves the app at startup, serves the bundle at `/app.json` and the runtime as unmodified ESM. Browser debug handle: `window.__apskel` (`store`, `engine`, `root`, `byPath`; plus `clientId` under run.js). Demo app: `apps/uppercase-demo/`.
+- `node tools/run.js <appDir> [--port 3000]` — Phase 4 runner: connects to PostgreSQL (defaults `apskel`@127.0.0.1/`apskel_dev`, password from `~/.pgpass`, `PG*` env vars override), applies the app's `schema.sql`, serves with the Wire attached (`POST /wire`, SSE at `/events`). Demo app: `apps/notes-demo/`.
 
 ## Hard Constraints
 
