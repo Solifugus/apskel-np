@@ -1762,6 +1762,33 @@ error naming the site; in this phase the known names are the framework
 registry (`apskel.auth.*`) — app-defined `<functions>` arrive with their own
 phase.
 
+RESOLVED (conflict declaration surface): the conflict policy is the
+`conflict=` attribute on the data-context element itself (the element that
+declares `table=`), validated at load against the closed menu —
+`offline-readonly` (default), `detect`, `lww`; an unknown value is a
+load-time error. For `detect`, v0.1 wires the **mechanism** and not the
+prompt: the record carries a `revision` column, every write sends the
+`baseRevision` it was based on, the server updates guarded on that revision
+and increments it, and a mismatch is a coherent 409 carrying the current
+revision — logged, not prompted; keep-mine/take-theirs arrives with the
+offline queue. Clients track current revisions as wire bookkeeping (from
+initial data and broadcasts), never as a visible field, and a client's own
+echo still updates its revision even though the store write is ignored —
+otherwise its next write would false-conflict.
+
+RESOLVED (reads through the Wire): `apskel.data.get` is the read
+counterpart of `apskel.data.set` — same allowlist derived from the app's
+own bindings, returns the value plus the current revision for `detect`
+contexts. With identity attached, both data types require a valid token;
+private drafts are not readable anonymously.
+
+RESOLVED (save policy attribute deferred past v0.1): save policy remains a
+property of the data context per the autosave-vs-explicit resolution, but
+the v0.1 slice contains only draft contexts, so no `save=` attribute ships
+yet — bound fields autosave, exactly the Wire behavior already in place.
+The attribute lands with the explicit-publish workflow immediately after
+the slice, rather than shipping unexercised.
+
 ---
 
 ## First Vertical Slice
