@@ -53,6 +53,7 @@ function nodeToJson(node, primitiveTypes) {
           domain: parseDomain(node.visibleSite.domain),
         }
       : null,
+    isCollection: !!node.isCollection,
     locals: [...node.locals].map(([name, decl]) => [name, decl.default]),
     content: node.content.map((seg) =>
       seg.kind === "ref"
@@ -191,6 +192,66 @@ export function collectSetFields(root) {
     byStorePath.set(storePath, entry);
   }
   return [...byStorePath.values()];
+}
+
+// The declared queries, plain: name, params, tables (the author-declared
+// refresh dependency list), read rule. SQL bodies stay server-side in
+// queries/<name>.sql — never in the bundle.
+export function collectQueries(root) {
+  return [...(root.data?.queries?.values() ?? [])].map((q) => ({
+    name: q.name,
+    params: q.params,
+    tables: q.tables,
+    read: q.read,
+  }));
+}
+
+// Every collection binding: its source (table or query call), composed
+// filter/order/limit, and the columns its template binds — the server
+// returns id plus exactly these, never *, per RESOLVED (apskel.data.select
+// and collection freshness).
+export function collectCollections(root) {
+  const collections = [];
+  (function walk(node) {
+    if (node.isCollection) {
+      const columns = new Set();
+      for (const site of root.allRefs) {
+        if (site.binding?.kind === "bound" && site.binding.target === node) {
+          columns.add(site.binding.field);
+        }
+      }
+      const entry = {
+        path: node.path,
+        table: node.attrs.table ?? null,
+        query: node.sourceSite
+          ? {
+              name: node.sourceSite.binding.name,
+              args: node.sourceSite.binding.args.map((a) =>
+                a.kind === "literal"
+                  ? { kind: "literal", value: JSON.parse(a.value) }
+                  : { kind: "ref", storePath: storePathOf(a.binding) }
+              ),
+            }
+          : null,
+        filter: node.filterSite
+          ? {
+              column: node.filterSite.binding.field,
+              items: node.filterSite.filterItems.map((i) =>
+                i.kind === "literal"
+                  ? { kind: "literal", value: i.parsed }
+                  : { kind: "ref", storePath: storePathOf(i.binding) }
+              ),
+            }
+          : null,
+        order: node.orderSpec ?? null,
+        limit: node.limitSpec ?? null,
+        columns: [...columns].sort(),
+      };
+      collections.push(entry);
+    }
+    for (const child of node.children) walk(child);
+  })(root);
+  return collections;
 }
 
 export function findByPath(root, targetPath) {

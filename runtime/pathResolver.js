@@ -72,6 +72,41 @@ export function resolveReferences(root) {
       }
     }
   }
+  // Nested collections follow graph edges, per RESOLVED (nested
+  // collections follow graph edges): an inner collection binding must be
+  // a declared graph child of the enclosing context's table. A
+  // query-sourced enclosing context has no graph position, so any inner
+  // collection under one is an error.
+  (function walkNested(node, enclosing) {
+    let next = enclosing;
+    if (node.attrs?.table !== undefined || node.attrs?.source !== undefined) {
+      if (node.isCollection && enclosing) {
+        const at = { file: node.file, line: node.line };
+        if (enclosing.query) {
+          throw new ApskelLoadError(
+            `collection <${node.name}> nested under the query-sourced context ` +
+              `'${enclosing.path}' — a query has no graph position, so nothing nests ` +
+              `under it, per RESOLVED (nested collections follow graph edges)`,
+            at
+          );
+        }
+        if (
+          node.attrs.source !== undefined ||
+          !root.data?.children?.get(enclosing.table)?.has(node.attrs.table)
+        ) {
+          throw new ApskelLoadError(
+            `collection <${node.name}> nested under the '${enclosing.table}' context ` +
+              `'${enclosing.path}' does not correspond to a declared graph edge from ` +
+              `'${enclosing.table}', per RESOLVED (nested collections follow graph edges)`,
+            at
+          );
+        }
+      }
+      next = { table: node.attrs.table ?? null, query: node.attrs.source ?? null, path: node.path };
+    }
+    for (const child of node.children ?? []) walkNested(child, next);
+  })(root, null);
+
   return root;
 }
 
@@ -111,7 +146,12 @@ function fail(site, message) {
 function resolveSite(site, root) {
   const inner = site.raw.slice(1, -1).trim();
   const { expr, domain } = splitDomain(inner);
-  site.domain = domain; // held unparsed; domains are a later phase
+  site.domain = domain;
+  if (site.isSource) {
+    site.form = "source";
+    site.binding = resolveSource(site, inner, root);
+    return;
+  }
   site.form = classify(expr);
   switch (site.form) {
     case "local":
@@ -205,12 +245,65 @@ function resolveLocal(site, expr) {
   return { kind: "local", target: scope, targetPath: scope.path, field: expr };
 }
 
+// --- source: source="queryName(args)" ---------------------------------------
+
+// A declared query as a context source, per RESOLVED (named queries are
+// declared, read-only sources): bare name or call form, arity checked
+// against the declared params at load, arguments literals or references.
+function resolveSource(site, inner, root) {
+  const m = inner.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*(?:\((.*)\))?$/s);
+  if (!m) fail(site, `malformed source expression '${inner}'`);
+  const [, name, argText] = m;
+  const query = root.data?.queries?.get(name);
+  if (!query) {
+    const known = [...(root.data?.queries?.keys() ?? [])];
+    fail(
+      site,
+      `unknown query '${name}' — ` +
+        (known.length ? `declared queries: ${known.join(", ")}` : `this app declares no <query> elements`)
+    );
+  }
+  const args = argText === undefined ? [] : splitArgs(argText).map((arg) => {
+    if (LITERAL.test(arg)) return { kind: "literal", value: arg };
+    const sub = { ...site, raw: `{${arg}}`, form: null, binding: null, isSource: false };
+    resolveSite(sub, root);
+    return { kind: "ref", form: sub.form, binding: sub.binding };
+  });
+  if (args.length !== query.params.length) {
+    fail(
+      site,
+      `query '${name}' takes ${query.params.length} parameter(s) (${query.params.join(", ") || "none"}) ` +
+        `— got ${args.length}`
+    );
+  }
+  return { kind: "source", name, query, args };
+}
+
 // --- bound: {.field} --------------------------------------------------------
 
 function resolveBound(site, expr, root) {
   const field = expr.slice(1);
   if (!field) fail(site, `malformed bound reference '${expr}'`);
   for (let n = site.owner; n; n = n.parent) {
+    if (n.attrs.source) {
+      // A query-sourced context: read-only by grammar, per RESOLVED
+      // (named queries are declared, read-only sources).
+      if (site.isInput) {
+        fail(
+          site,
+          `input binding '.${field}' under the query-sourced context '${n.path}' — ` +
+            `query sources are read-only; writes belong to table contexts`
+        );
+      }
+      return {
+        kind: "bound",
+        target: n,
+        targetPath: n.path,
+        table: null,
+        query: n.attrs.source,
+        field,
+      };
+    }
     if (n.attrs.table) {
       // Edge classification is by graph declaration, at load, period —
       // per RESOLVED (a set field is a domain-bearing edge reference),
@@ -219,13 +312,50 @@ function resolveBound(site, expr, root) {
       // an actual column of the same name is a startup error (only the
       // schema knows columns).
       const edge = root.data?.children?.get(n.attrs.table)?.get(field);
-      if (edge) {
+      if (edge && !site.isFilter) {
         return resolveEdge(site, n, field, edge, root);
       }
-      return { kind: "bound", target: n, targetPath: n.path, table: n.attrs.table, field };
+      const binding = { kind: "bound", target: n, targetPath: n.path, table: n.attrs.table, field };
+      if (site.isFilter) resolveFilter(site, binding, root);
+      return binding;
     }
   }
-  fail(site, `bound field '${expr}' has no data context: no enclosing component declares table=`);
+  fail(
+    site,
+    `bound field '${expr}' has no data context: no enclosing component declares table= or source=`
+  );
+}
+
+// filter= — the domain syntax on a column of the binding's own rows, per
+// RESOLVED (filter= is the domain syntax on a column): items are literals
+// or absolute references (a reference value makes the filter dynamic); no
+// bare-truthiness form.
+function resolveFilter(site, binding, root) {
+  if (site.domain === null || site.domain === undefined || site.domain === "") {
+    fail(
+      site,
+      `filter= takes the domain syntax — filter=".${binding.field}: value, value"; ` +
+        `there is no bare-truthiness form`
+    );
+  }
+  site.filterItems = splitArgs(site.domain).map((item) => {
+    // Domain-grammar literals: bare words are strings (like visible=),
+    // quoted strings / numbers / booleans parse as themselves.
+    if (LITERAL.test(item)) return { kind: "literal", parsed: JSON.parse(item) };
+    if (item === "app" || item.startsWith("app.")) {
+      const sub = { ...site, raw: `{${item}}`, form: null, binding: null, isFilter: false };
+      resolveSite(sub, root);
+      return { kind: "ref", binding: sub.binding };
+    }
+    if (/^[A-Za-z_][A-Za-z0-9_-]*$/.test(item)) {
+      return { kind: "literal", parsed: item };
+    }
+    fail(
+      site,
+      `filter item '${item}' — filter values are literals or absolute {app...} ` +
+        `references, per RESOLVED (filter= is the domain syntax on a column)`
+    );
+  });
 }
 
 // An edge reference is multi-valued and its domain is mandatory: the

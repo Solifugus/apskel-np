@@ -2,6 +2,8 @@
 
     <client>
 
+        {x = ""}
+
         <list type="layout" orient="vertical" source="publishedEditions(app.x, 3)">
             {.title}
         </list>

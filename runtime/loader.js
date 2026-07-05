@@ -49,6 +49,10 @@ const CONFLICT_MENU = new Set(["offline-readonly", "detect", "lww"]);
 const READ_MENU = new Set(["public", "users", "owner"]);
 const WRITE_MENU = new Set(["users", "owner", "none"]);
 
+// The query read menu, per RESOLVED (the query is the permission
+// boundary): a list is not a row, so there is no owner query.
+const QUERY_READ_MENU = new Set(["public", "users"]);
+
 // Rules on the framework identity tables are fixed (read="owner",
 // write="none") and not overridable, per RESOLVED (framework identity
 // tables are Wire-locked).
@@ -193,7 +197,7 @@ export function loadApp(appXmlPath, options = {}) {
   const dataEl = rawRoot.children.find((c) => c.tag === "data");
   root.data = dataEl
     ? buildData(dataEl)
-    : { permissions: [], children: new Map(), nodes: new Map() };
+    : { permissions: [], children: new Map(), nodes: new Map(), queries: new Map() };
 
   root.allRefs = ctx.allRefs;
   root.appWideNames = ctx.appWideNames;
@@ -268,18 +272,83 @@ function buildData(dataEl) {
   const declaredAt = new Map(); // table -> {file, line} of its rule-bearing node
   const children = new Map(); // parent table -> Map(child table -> {via, join, file, line})
   const nodes = new Map(); // every declared graph node tag -> first {file, line}
+  const queries = new Map(); // query name -> declaration
 
   for (const graphEl of dataEl.children) {
     if (!graphEl.tag) continue;
     const at = { file: graphEl.file, line: graphEl.line };
+    if (graphEl.tag === "query") {
+      buildQuery(graphEl, at);
+      continue;
+    }
     if (graphEl.tag !== "graph") {
-      throw new ApskelLoadError(`<data> may contain only <graph>, found <${graphEl.tag}>`, at);
+      throw new ApskelLoadError(
+        `<data> may contain only <graph> and <query>, found <${graphEl.tag}>`,
+        at
+      );
     }
     for (const child of graphEl.children) {
       if (child.tag) walkGraphNode(child, []);
     }
   }
-  return { permissions, children, nodes };
+  return { permissions, children, nodes, queries };
+
+  // <query name= params= tables= read=/> — a declared, read-only source,
+  // per RESOLVED (named queries are declared, read-only sources). The SQL
+  // body lives in queries/<name>.sql; file existence and the id-column
+  // contract are startup checks.
+  function buildQuery(el, at) {
+    const { name, params, tables, read } = el.attrs;
+    for (const key of Object.keys(el.attrs)) {
+      if (!["name", "params", "tables", "read"].includes(key)) {
+        throw new ApskelLoadError(`unknown attribute '${key}' on <query>`, at);
+      }
+    }
+    if (!name || !SQL_IDENT.test(name)) {
+      throw new ApskelLoadError(`<query> needs a valid name= (got '${name ?? ""}')`, at);
+    }
+    if (queries.has(name)) {
+      throw new ApskelLoadError(`query '${name}' declared twice`, at);
+    }
+    if (tables === undefined || tables.trim() === "") {
+      throw new ApskelLoadError(
+        `<query name="${name}"> needs tables= — the refresh dependency list is ` +
+          `mandatory and author-declared, per RESOLVED (apskel.data.select and ` +
+          `collection freshness)`,
+        at
+      );
+    }
+    const tableList = tables.split(",").map((t) => t.trim());
+    for (const t of tableList) {
+      if (!SQL_IDENT.test(t)) {
+        throw new ApskelLoadError(`tables= entry '${t}' on <query name="${name}"> is not a valid table name`, at);
+      }
+    }
+    const paramList = params === undefined || params.trim() === ""
+      ? []
+      : params.split(",").map((p) => p.trim());
+    for (const p of paramList) {
+      if (!SQL_IDENT.test(p)) {
+        throw new ApskelLoadError(`params= entry '${p}' on <query name="${name}"> is not a valid name`, at);
+      }
+    }
+    const effRead = read ?? "users";
+    if (!QUERY_READ_MENU.has(effRead)) {
+      throw new ApskelLoadError(
+        `unknown read rule '${read}' on <query name="${name}"> — the query menu is: ` +
+          `${[...QUERY_READ_MENU].join(", ")} (a list is not a row; there is no owner query)`,
+        at
+      );
+    }
+    queries.set(name, {
+      name,
+      params: paramList,
+      tables: tableList,
+      read: effRead,
+      file: el.file,
+      line: el.line,
+    });
+  }
 
   // ancestors: [{table, via}] from the immediate parent up to the graph root.
   function walkGraphNode(el, ancestors) {
@@ -469,6 +538,14 @@ function buildInstance(rawEl, parent, scope, ctx, expansionStack) {
   }
 
   if (node.attrs.conflict !== undefined) {
+    if (node.attrs.source !== undefined) {
+      throw new ApskelLoadError(
+        `conflict= on <${node.name}> with source= — query sources are read-only ` +
+          `by grammar, per RESOLVED (named queries are declared, read-only sources); ` +
+          `conflict policy belongs to writable table contexts`,
+        at
+      );
+    }
     if (!node.attrs.table) {
       throw new ApskelLoadError(
         `conflict= on <${node.name}> without table= — the conflict policy is a ` +
@@ -484,6 +561,70 @@ function buildInstance(rawEl, parent, scope, ctx, expansionStack) {
       );
     }
   }
+
+  if (node.attrs.table !== undefined && node.attrs.source !== undefined) {
+    throw new ApskelLoadError(
+      `<${node.name}> declares both table= and source= — a context has one source`,
+      at
+    );
+  }
+
+  // filter= — the domain syntax on a column of the binding's own rows,
+  // legal only on TABLE sources (a query owns its own WHERE), per
+  // RESOLVED (filter= is the domain syntax on a column).
+  if (node.attrs.filter !== undefined) {
+    if (node.attrs.source !== undefined) {
+      throw new ApskelLoadError(
+        `filter= on <${node.name}> with source= — a query owns its own WHERE; ` +
+          `filter= is legal only on table sources`,
+        at
+      );
+    }
+    if (!node.attrs.table) {
+      throw new ApskelLoadError(`filter= on <${node.name}> without table=`, at);
+    }
+    if (/[{}]/.test(node.attrs.filter)) {
+      throw new ApskelLoadError(
+        `filter attribute of <${node.name}> takes the bare domain syntax without ` +
+          `braces (filter="${node.attrs.filter}")`,
+        at
+      );
+    }
+  }
+
+  // order= / limit= — closed forms, per RESOLVED (order= and limit=
+  // closed forms). Column existence is a startup check.
+  if (node.attrs.order !== undefined) {
+    if (!node.attrs.table && !node.attrs.source) {
+      throw new ApskelLoadError(`order= on <${node.name}> without a table= or source=`, at);
+    }
+    const m = node.attrs.order.match(/^\.([A-Za-z_][A-Za-z0-9_]*)(?:\s+(asc|desc))?$/);
+    if (!m) {
+      throw new ApskelLoadError(
+        `order= takes '.column' or '.column asc|desc' — got '${node.attrs.order}' on <${node.name}>`,
+        at
+      );
+    }
+    node.orderSpec = { column: m[1], dir: m[2] ?? "asc" };
+  }
+  if (node.attrs.limit !== undefined) {
+    if (!node.attrs.table && !node.attrs.source) {
+      throw new ApskelLoadError(`limit= on <${node.name}> without a table= or source=`, at);
+    }
+    if (!/^\d+$/.test(node.attrs.limit)) {
+      throw new ApskelLoadError(
+        `limit= takes an integer literal — got '${node.attrs.limit}' on <${node.name}>`,
+        at
+      );
+    }
+    node.limitSpec = Number(node.attrs.limit);
+  }
+
+  // A table= or source= mount with no record= IS a collection binding,
+  // per RESOLVED (repetition is what it means to bind to a collection).
+  node.isCollection =
+    (node.attrs.table !== undefined || node.attrs.source !== undefined) &&
+    node.attrs.record === undefined;
 
   // Register the name in its scope. Names inside a composite definition must
   // be unique within that definition; duplicates at app scope are legal until
@@ -543,6 +684,27 @@ function buildInstance(rawEl, parent, scope, ctx, expansionStack) {
         );
       }
       node.fieldSite = addRefSite(`{${value}}`, rawEl.file, rawEl.line, node, scope, ctx);
+      node.fieldSite.isInput = true; // a query-sourced context must reject this
+      continue;
+    }
+    // source= — a declared query as the context's source, call grammar:
+    // bare name or name(args), per RESOLVED (named queries are declared,
+    // read-only sources).
+    if (key === "source") {
+      if (/[{}]/.test(value)) {
+        throw new ApskelLoadError(
+          `source attribute of <${node.name}> takes a bare query name or call ` +
+            `without braces (source="${value}")`,
+          at
+        );
+      }
+      node.sourceSite = addRefSite(`{${value}}`, rawEl.file, rawEl.line, node, scope, ctx);
+      node.sourceSite.isSource = true;
+      continue;
+    }
+    if (key === "filter") {
+      node.filterSite = addRefSite(`{${value}}`, rawEl.file, rawEl.line, node, scope, ctx);
+      node.filterSite.isFilter = true;
       continue;
     }
     // visible= on any instance: a brace-less reference; the domain syntax
@@ -561,8 +723,8 @@ function buildInstance(rawEl, parent, scope, ctx, expansionStack) {
     }
     // record= on a data context: an integer literal is a fixed row; anything
     // else is a brace-less reference whose VALUE varies at runtime, per
-    // RESOLVED (record selection).
-    if (key === "record" && node.attrs.table && !/^\d+$/.test(value)) {
+    // RESOLVED (record selection). Query-sourced record contexts take it too.
+    if (key === "record" && (node.attrs.table || node.attrs.source) && !/^\d+$/.test(value)) {
       if (/[{}]/.test(value)) {
         throw new ApskelLoadError(
           `record attribute of <${node.name}> takes a bare reference expression ` +
