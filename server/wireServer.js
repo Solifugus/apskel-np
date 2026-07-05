@@ -35,9 +35,19 @@ const IDENTITY_READABLE = new Map([
 
 const DEFAULT_RULES = { read: "users", write: "users" }; // pre-7.2 behavior
 
-export function attachWire(app, { db, bound, log = console, auth = null, permissions = [] }) {
+export function attachWire(
+  app,
+  { db, bound, log = console, auth = null, permissions = [], setFields = [] }
+) {
   const allowlist = new Map(bound.map((b) => [`${b.table}.${b.field}`, b]));
   const permByTable = new Map(permissions.map((p) => [p.table, p]));
+  // Set fields by parent:edge, per RESOLVED (membership writes are
+  // whole-set replaces); their options descriptors form the options
+  // allowlist — arbitrary column pairs never reach SQL.
+  const setByKey = new Map(setFields.map((s) => [`${s.table}:${s.edge}`, s]));
+  const optionsAllow = new Map(
+    setFields.map((s) => [`${s.options.table}:${s.options.value}:${s.options.label}`, s.options])
+  );
   const sseClients = new Set(); // {res, userId}
 
   app.use(express.json());
@@ -137,6 +147,92 @@ export function attachWire(app, { db, bound, log = console, auth = null, permiss
       res.json({ ok: true });
     },
 
+    // Membership, per RESOLVED (membership writes are whole-set replaces):
+    // the desired set replaces the current one atomically — a single CTE
+    // statement (one implicit transaction even on a shared connection):
+    // DELETE the missing, INSERT the new, ON CONFLICT DO NOTHING. An
+    // invalid member (FK violation) rolls the whole diff back. Members are
+    // canonically sorted by stored key everywhere. Permissions ride the
+    // PARENT row.
+    "apskel.data.setMembers": async (envelope, req, res) => {
+      const g = await guardMembers(envelope, req, res, "write");
+      if (!g) return;
+      const s = g.entry;
+      if (!Array.isArray(envelope.members)) {
+        return res.status(400).json({ ok: false, error: "setMembers needs a members array" });
+      }
+      const members = sortMembers(envelope.members);
+      try {
+        await db.query(
+          `WITH del AS (DELETE FROM ${quoteIdent(s.joinTable)} ` +
+            `WHERE ${quoteIdent(s.parentColumn)} = $1 ` +
+            `AND NOT (${quoteIdent(s.childColumn)} = ANY($2::${s.memberType}[]))) ` +
+            `INSERT INTO ${quoteIdent(s.joinTable)} ` +
+            `(${quoteIdent(s.parentColumn)}, ${quoteIdent(s.childColumn)}) ` +
+            `SELECT $1, m FROM unnest($2::${s.memberType}[]) AS m ` +
+            `ON CONFLICT DO NOTHING`,
+          [envelope.id, members]
+        );
+      } catch (e) {
+        return res
+          .status(400)
+          .json({ ok: false, error: `membership rejected: ${e.message}` });
+      }
+      await broadcastAccepted(g, {
+        type: "apskel.data.membersChanged",
+        path: s.path,
+        table: s.table,
+        id: envelope.id,
+        edge: s.edge,
+        members,
+        sourceClient: envelope.sourceClient ?? null,
+      });
+      res.json({ ok: true, members });
+    },
+
+    "apskel.data.getMembers": async (envelope, req, res) => {
+      const g = await guardMembers(envelope, req, res, "read");
+      if (!g) return;
+      const s = g.entry;
+      const result = await db.query(
+        `SELECT ${quoteIdent(s.childColumn)} AS member FROM ${quoteIdent(s.joinTable)} ` +
+          `WHERE ${quoteIdent(s.parentColumn)} = $1 ORDER BY ${quoteIdent(s.childColumn)}`,
+        [envelope.id]
+      );
+      res.json({ ok: true, members: result.rows.map((r) => r.member) });
+    },
+
+    // The option list, per RESOLVED (options are runtime state at the
+    // widget's own path): (value, label) pairs ordered by label, governed
+    // by the options table's own read rule. The descriptor must match one
+    // declared at load.
+    "apskel.data.options": async (envelope, req, res) => {
+      const { table, value, label } = envelope;
+      const opt = optionsAllow.get(`${table}:${value}:${label}`);
+      if (!opt) {
+        return res
+          .status(400)
+          .json({ ok: false, error: `no options source '${table}.${value}->${table}.${label}' in this app` });
+      }
+      if (auth) {
+        const rule = rulesFor(table).read;
+        if (rule === "owner") {
+          return res.status(403).json({
+            ok: false,
+            error: `options on ${table} requires per-row read (read="owner") — not a listable source`,
+          });
+        }
+        if (rule !== "public" && !auth.identity(req)) {
+          return res.status(401).json({ ok: false, error: "authentication required" });
+        }
+      }
+      const result = await db.query(
+        `SELECT ${quoteIdent(value)} AS value, ${quoteIdent(label)} AS label ` +
+          `FROM ${quoteIdent(table)} ORDER BY ${quoteIdent(label)}`
+      );
+      res.json({ ok: true, options: result.rows });
+    },
+
     // The read counterpart, per RESOLVED (reads through the Wire): same
     // allowlist, value plus current revision for detect contexts.
     "apskel.data.get": async (envelope, req, res) => {
@@ -215,6 +311,46 @@ export function attachWire(app, { db, bound, log = console, auth = null, permiss
       }
     }
     return { b, identity, ownerUserId };
+  }
+
+  // The membership guard: same access ladder as guardData, but the
+  // allowlist is the set-field registry and the rules are the PARENT
+  // table's, per RESOLVED (membership permissions ride the parent row).
+  async function guardMembers(envelope, req, res, mode) {
+    const { table, id, edge } = envelope;
+    const entry = setByKey.get(`${table}:${edge}`);
+    if (!entry) {
+      res.status(400).json({ ok: false, error: `no set field '${table}.${edge}' in this app` });
+      return null;
+    }
+    if (id === undefined || id === null) {
+      res.status(400).json({ ok: false, error: "missing id" });
+      return null;
+    }
+    if (!auth) return { entry, identity: null, ownerUserId: null };
+    const rules = rulesFor(table);
+    const rule = mode === "read" ? rules.read : rules.write;
+    if (rule === "none") {
+      res.status(403).json({ ok: false, error: `${mode} on ${table} is not allowed over the wire` });
+      return null;
+    }
+    let identity = null;
+    if (rule !== "public") {
+      identity = auth.identity(req);
+      if (!identity) {
+        res.status(401).json({ ok: false, error: "authentication required" });
+        return null;
+      }
+    }
+    let ownerUserId = null;
+    if (rule === "owner") {
+      ownerUserId = await ownerOf(table, id);
+      if (ownerUserId === null || String(ownerUserId) !== String(identity.userId)) {
+        res.status(403).json({ ok: false, error: `${mode} on ${table} requires owner` });
+        return null;
+      }
+    }
+    return { entry, identity, ownerUserId };
   }
 
   // An accepted write broadcasts scoped by the table's READ rule — who may
@@ -306,6 +442,11 @@ export function attachWire(app, { db, bound, log = console, auth = null, permiss
 export async function resolvePermissionColumns(db, permissions) {
   const cache = new Map();
   for (const p of permissions) {
+    // Hop columns resolve only for tables whose read or write rule is
+    // owner, per the hop-narrowing sentence in RESOLVED (owner is a graph
+    // walk) — a non-owner node's ancestor path may legitimately cross a
+    // join edge, where no child->parent FK exists.
+    if (p.read !== "owner" && p.write !== "owner") continue;
     for (const hop of p.hops) {
       const key = `${hop.child}->${hop.parent}:${hop.via ?? ""}`;
       if (!cache.has(key)) cache.set(key, await resolveHopColumn(db, hop));
@@ -349,6 +490,152 @@ async function resolveHopColumn(db, hop) {
     );
   }
   return candidates[0];
+}
+
+// Canonical member order is by stored key, per RESOLVED (membership
+// writes are whole-set replaces) — combined with the store's ordered-
+// element array equality, set equality falls out of one equality rule.
+function sortMembers(members) {
+  return [...members].sort((a, b) => (a > b) - (a < b));
+}
+
+// Startup resolution of set-field edges against the live schema, per
+// RESOLVED (the graph has two edge kinds). For each edge: the declared
+// child name must not collide with an actual column on the parent; a join
+// table (exactly one FK to each endpoint) must exist — a direct
+// child->parent FK instead is the one-to-many rejection; multiple
+// candidates need join= on the child graph node; and the domain's stored
+// column must equal the column the join FK references. Mutates each entry
+// in place, adding joinTable/parentColumn/childColumn/memberType.
+// dataNodes is the Map of every declared graph node tag -> {file, line},
+// for the join-table-declared-as-node check.
+export async function resolveSetFieldEdges(db, setFields, dataNodes = new Map()) {
+  const done = new Map();
+  for (const s of setFields) {
+    const key = `${s.table}:${s.edge}`;
+    if (!done.has(key)) done.set(key, await resolveOneEdge(db, s, dataNodes));
+    Object.assign(s, done.get(key));
+  }
+  return setFields;
+}
+
+async function resolveOneEdge(db, s, dataNodes) {
+  const at = s.site ? ` [${s.site.file}:${s.site.line}] (reference site: ${s.site.ref})` : "";
+
+  const collision = await db.query(
+    `SELECT column_name FROM information_schema.columns ` +
+      `WHERE table_name = $1 AND column_name = $2`,
+    [s.table, s.edge]
+  );
+  if (collision.rows.length > 0) {
+    throw new Error(
+      `column '${s.table}.${s.edge}' collides with the declared graph edge ` +
+        `'${s.table}->${s.edge}' — edge classification is by declaration at load, so ` +
+        `rename the column or the edge${at}`
+    );
+  }
+
+  const refsParent = await fksReferencing(db, s.table);
+  const refsChild = await fksReferencing(db, s.edge);
+  const parentSides = new Map(); // joining table -> {col}
+  for (const r of refsParent) parentSides.set(r.child_table, r);
+  const candidates = [
+    ...new Set(refsChild.map((r) => r.child_table).filter((t) => parentSides.has(t))),
+  ].filter((t) => t !== s.table && t !== s.edge);
+
+  if (candidates.length === 0) {
+    if (refsParent.some((r) => r.child_table === s.edge)) {
+      throw new Error(
+        `the edge ${s.table}->${s.edge} is one-to-many (${s.edge} has a direct FK to ` +
+          `${s.table}) — a set field requires a join edge; membership is a join-table ` +
+          `relationship${at}`
+      );
+    }
+    throw new Error(
+      `no join table between ${s.table} and ${s.edge} — a set field requires a table ` +
+        `with one FK to each endpoint${at}`
+    );
+  }
+  let joinTable;
+  if (candidates.length > 1) {
+    if (!s.join) {
+      throw new Error(
+        `ambiguous join tables between ${s.table} and ${s.edge}: ` +
+          `${candidates.join(", ")} — disambiguate with join= on the <${s.edge}> graph node${at}`
+      );
+    }
+    if (!candidates.includes(s.join)) {
+      throw new Error(
+        `join='${s.join}' is not a join table between ${s.table} and ${s.edge} ` +
+          `(candidates: ${candidates.join(", ")})${at}`
+      );
+    }
+    joinTable = s.join;
+  } else {
+    joinTable = candidates[0];
+    if (s.join && s.join !== joinTable) {
+      throw new Error(
+        `join='${s.join}' is not a join table between ${s.table} and ${s.edge} ` +
+          `(candidate: ${joinTable})${at}`
+      );
+    }
+  }
+
+  const node = dataNodes.get?.(joinTable);
+  if (node) {
+    throw new Error(
+      `join table '${joinTable}' is declared as a graph node (${node.file}:${node.line}) — ` +
+        `join tables are introspected machinery, never graph nodes${at}`
+    );
+  }
+
+  const parentFks = refsParent.filter((r) => r.child_table === joinTable);
+  const childFks = refsChild.filter((r) => r.child_table === joinTable);
+  if (parentFks.length !== 1 || childFks.length !== 1) {
+    throw new Error(
+      `join table '${joinTable}' must have exactly one FK to each of ${s.table} and ` +
+        `${s.edge} (found ${parentFks.length} and ${childFks.length})${at}`
+    );
+  }
+  if (childFks[0].ref_col !== s.stored) {
+    throw new Error(
+      `the domain stores ${s.edge}.${s.stored}, but the join FK ` +
+        `${joinTable}.${childFks[0].col} references ${s.edge}.${childFks[0].ref_col} — ` +
+        `the stored value is not the author's choice${at}`
+    );
+  }
+
+  const typeRow = await db.query(
+    `SELECT udt_name FROM information_schema.columns WHERE table_name = $1 AND column_name = $2`,
+    [joinTable, childFks[0].col]
+  );
+  const memberType = typeRow.rows[0]?.udt_name ?? "int4";
+  if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(memberType)) {
+    throw new Error(`unusable member column type '${memberType}' on ${joinTable}`);
+  }
+  return {
+    joinTable,
+    parentColumn: parentFks[0].col,
+    childColumn: childFks[0].col,
+    memberType,
+  };
+}
+
+async function fksReferencing(db, table) {
+  const result = await db.query(
+    `SELECT tc.table_name AS child_table, kcu.column_name AS col, ccu.column_name AS ref_col
+       FROM information_schema.table_constraints tc
+       JOIN information_schema.key_column_usage kcu
+         ON kcu.constraint_name = tc.constraint_name
+        AND kcu.constraint_schema = tc.constraint_schema
+       JOIN information_schema.constraint_column_usage ccu
+         ON ccu.constraint_name = tc.constraint_name
+        AND ccu.constraint_schema = tc.constraint_schema
+      WHERE tc.constraint_type = 'FOREIGN KEY'
+        AND ccu.table_name = $1`,
+    [table]
+  );
+  return result.rows;
 }
 
 function quoteIdent(ident) {

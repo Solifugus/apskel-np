@@ -23,9 +23,14 @@ import {
   collectBoundFields,
   collectUsesAuth,
   collectPermissions,
+  collectSetFields,
 } from "../runtime/serialize.js";
 import { createAppServer, attachShellFallback } from "../server/appServer.js";
-import { attachWire, resolvePermissionColumns } from "../server/wireServer.js";
+import {
+  attachWire,
+  resolvePermissionColumns,
+  resolveSetFieldEdges,
+} from "../server/wireServer.js";
 import { createAuth } from "../server/authServer.js";
 import { fileURLToPath } from "node:url";
 
@@ -47,17 +52,20 @@ let baseBundle;
 let bound;
 let usesAuth;
 let permissions;
+let setFields;
 try {
   root = resolveReferences(loadApp(path.join(appDir, "app.xml")));
   bound = collectBoundFields(root);
   usesAuth = collectUsesAuth(root);
   permissions = collectPermissions(root);
+  setFields = collectSetFields(root);
   baseBundle = serializeApp(root, {
     title: root.attrs.title ?? "Apskel App",
     style: root.clientAttrs.style ?? null,
     clientFunctions: root.clientAttrs.functions ?? null,
     bound,
     permissions,
+    setFields,
     wire: { endpoint: "/wire", events: "/events" },
     auth: usesAuth,
   });
@@ -116,13 +124,14 @@ if (fs.existsSync(schemaFile)) {
   console.log(`applied ${schemaFile}`);
 }
 
-// The owner-walk FK columns come from the live schema, never the XML —
-// ambiguity is a startup error naming the candidates, per RESOLVED (owner
-// is a graph walk).
+// The owner-walk FK columns and the set-field join edges come from the
+// live schema, never the XML — collisions and ambiguities are startup
+// errors naming the site, per RESOLVED (error taxonomy: load vs. startup).
 try {
   await resolvePermissionColumns(db, permissions);
+  await resolveSetFieldEdges(db, setFields, root.data.nodes);
 } catch (e) {
-  console.error(`PERMISSIONS ERROR: ${e.message}`);
+  console.error(`STARTUP ERROR: ${e.message}`);
   process.exit(1);
 }
 
@@ -157,7 +166,7 @@ const app = createAppServer({
   appDir,
   bundleProvider: async () => ({ ...baseBundle, ...(await fetchInitialData()) }),
 });
-attachWire(app, { db, bound, auth, permissions });
+attachWire(app, { db, bound, auth, permissions, setFields });
 attachShellFallback(app); // deep links: /edit/2 serves the shell — last, so /wire and /events win
 
 app.listen(port, () => {

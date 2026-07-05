@@ -98,10 +98,13 @@ check(
   const kf = resolveReferences(loadApp(path.join(repoDir, "apps", "knowledge-foyer", "app.xml")));
   const kfPerms = collectPermissions(kf);
   check(
-    "knowledge-foyer v0.3 declares articles + article_editions public/owner",
-    kfPerms.length === 2 &&
-      kfPerms.every((p) => p.read === "public" && p.write === "owner") &&
-      kfPerms.some((p) => p.table === "article_editions" && p.hops.length === 2),
+    "knowledge-foyer declares articles + article_editions public/owner, tags public/none",
+    kfPerms.length === 3 &&
+      kfPerms.some((p) => p.table === "articles" && p.read === "public" && p.write === "owner") &&
+      kfPerms.some(
+        (p) => p.table === "article_editions" && p.write === "owner" && p.hops.length === 2
+      ) &&
+      kfPerms.some((p) => p.table === "tags" && p.read === "public" && p.write === "none"),
     JSON.stringify(kfPerms)
   );
 }

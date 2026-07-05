@@ -25,9 +25,16 @@
 
 const emptyId = (id) => id === undefined || id === null || id === "";
 
+// Canonical member order is by stored key — the client sends sorted, the
+// server responds and broadcasts sorted, and the store's ordered-element
+// array equality then behaves as set equality, per RESOLVED (membership
+// writes are whole-set replaces).
+export const sortMembers = (members) => [...members].sort((a, b) => (a > b) - (a < b));
+
 export function attachWireSend({
   engine,
   bound,
+  setFields = [],
   clientId,
   send,
   revisions = new Map(),
@@ -35,6 +42,29 @@ export function attachWireSend({
   log = console,
 }) {
   const byStorePath = new Map(bound.map((b) => [b.storePath, b]));
+  const setByStorePath = new Map(setFields.map((s) => [s.storePath, s]));
+
+  // Set-field watchers: same seam, same capture rule (row id at
+  // interaction time), same loading-window suspension as bound fields.
+  for (const s of setFields) {
+    engine.watch({
+      name: `wire:${s.storePath}`,
+      fields: [s.storePath],
+      skipOrigins: ["server"],
+      run: (ctx) => {
+        const id = s.recordPath ? ctx.get(s.recordPath) : s.record;
+        if (s.recordPath && emptyId(id)) return; // empty context: sends suppressed
+        if (s.recordPath && isLoading(s.path)) {
+          log.warn?.(
+            `[apskel] membership change on ${s.storePath} discarded: row ${id} still loading`
+          );
+          return;
+        }
+        if (!Array.isArray(ctx.value)) return; // undefined = empty context, nothing to send
+        ctx.enqueueEffect(s.storePath, { value: sortMembers(ctx.value), id });
+      },
+    });
+  }
 
   for (const b of bound) {
     engine.watch({
@@ -61,6 +91,19 @@ export function attachWireSend({
   }
 
   engine.onEffect((storePath, effect) => {
+    const s = setByStorePath.get(storePath);
+    if (s) {
+      send({
+        type: "apskel.data.setMembers",
+        path: s.path,
+        table: s.table,
+        id: effect.id,
+        edge: s.edge,
+        members: effect.value,
+        sourceClient: clientId,
+      });
+      return;
+    }
     const b = byStorePath.get(storePath);
     if (!b) return; // an effect someone else enqueued — not wire traffic
     const envelope = {
@@ -81,15 +124,40 @@ export function attachWireSend({
   return byStorePath;
 }
 
-export function attachWireReceive({ store, bound, clientId, revisions = new Map() }) {
+export function attachWireReceive({
+  store,
+  bound,
+  setFields = [],
+  clientId,
+  revisions = new Map(),
+}) {
   const staticByRowField = new Map(
     bound.filter((b) => !b.recordPath).map((b) => [`${b.table}:${b.record}:${b.field}`, b])
   );
   const dynamic = bound.filter((b) => b.recordPath);
+  const staticSets = new Map(
+    setFields.filter((s) => !s.recordPath).map((s) => [`${s.table}:${s.record}:${s.edge}`, s])
+  );
+  const dynamicSets = setFields.filter((s) => s.recordPath);
 
   // Returns what happened, for the harness: 'applied' | 'echo' | 'unbound' | 'ignored'
   return function handleEvent(envelope) {
-    if (!envelope || envelope.type !== "apskel.data.changed") return "ignored";
+    if (!envelope) return "ignored";
+    if (envelope.type === "apskel.data.membersChanged") {
+      const s =
+        staticSets.get(`${envelope.table}:${envelope.id}:${envelope.edge}`) ??
+        dynamicSets.find(
+          (d) =>
+            d.table === envelope.table &&
+            d.edge === envelope.edge &&
+            String(store.get(d.recordPath)) === String(envelope.id)
+        );
+      if (!s) return "unbound";
+      if (envelope.sourceClient && envelope.sourceClient === clientId) return "echo";
+      store.applyServerWrite(s.storePath, envelope.members);
+      return "applied";
+    }
+    if (envelope.type !== "apskel.data.changed") return "ignored";
     // A dynamic context matches only when the broadcast row IS its current
     // selection; a broadcast for another row of the same table is unbound.
     const b =
@@ -132,26 +200,32 @@ export function attachRecordContexts({
   engine,
   store,
   bound,
+  setFields = [],
   revisions = new Map(),
   call,
   skipInitial = new Set(),
   log = console,
 }) {
   const contexts = new Map(); // context path -> {recordPath|fixedId, fields, gen}
-  for (const b of bound) {
-    if (!b.recordPath && (b.record === null || b.record === undefined)) continue;
+  const addField = (entry, isSet) => {
+    if (!entry.recordPath && (entry.record === null || entry.record === undefined)) return;
     const c =
-      contexts.get(b.path) ??
+      contexts.get(entry.path) ??
       {
-        path: b.path,
-        recordPath: b.recordPath ?? null,
-        fixedId: b.recordPath ? null : b.record,
+        path: entry.path,
+        recordPath: entry.recordPath ?? null,
+        fixedId: entry.recordPath ? null : entry.record,
         fields: [],
         gen: 0,
       };
-    c.fields.push(b);
-    contexts.set(b.path, c);
-  }
+    c.fields.push(isSet ? { ...entry, isSet: true } : entry);
+    contexts.set(entry.path, c);
+  };
+  for (const b of bound) addField(b, false);
+  // Set fields load through getMembers in the same context machinery —
+  // never through initialData (member arrays are wire state from the
+  // first fetch on).
+  for (const s of setFields) addField(s, true);
   const loading = new Set();
 
   async function loadContext(c, { skip } = {}) {
@@ -166,14 +240,19 @@ export function attachRecordContexts({
     loading.add(c.path);
     try {
       for (const b of fields) {
-        const resp = await call({ type: "apskel.data.get", table: b.table, id, field: b.field });
+        const resp = b.isSet
+          ? await call({ type: "apskel.data.getMembers", table: b.table, id, edge: b.edge })
+          : await call({ type: "apskel.data.get", table: b.table, id, field: b.field });
         if (gen !== c.gen) return; // selection moved again — stale fetch
         if (resp?.ok) {
-          store.applyServerWrite(b.storePath, resp.value);
+          store.applyServerWrite(b.storePath, b.isSet ? resp.members : resp.value);
           if (resp.revision !== undefined) revisions.set(`${b.table}:${id}`, resp.revision);
         } else {
           store.applyServerWrite(b.storePath, undefined);
-          log.warn?.(`[apskel] could not load ${b.table} row ${id} ${b.field}:`, resp?.error);
+          log.warn?.(
+            `[apskel] could not load ${b.table} row ${id} ${b.isSet ? b.edge : b.field}:`,
+            resp?.error
+          );
         }
       }
     } finally {

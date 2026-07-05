@@ -77,6 +77,22 @@ export function mountApp(root, { store, engine, document, primitives, rootEl, fu
           run: (c) => module.write(ctx, "field", c.value),
         });
       }
+      if (node.optionsPath) {
+        // The option list is runtime state at the widget's own path. The
+        // field is re-pushed after every options write so the primitive
+        // can stay stateless: rebuild the inputs, then re-check them from
+        // the store's value — never from anything the primitive kept.
+        module.write(ctx, "options", store.get(node.optionsPath));
+        if (node.fieldPath) module.write(ctx, "field", store.get(node.fieldPath));
+        engine.watch({
+          name: `options:${node.path}`,
+          fields: [node.optionsPath],
+          run: (c) => {
+            module.write(ctx, "options", c.value);
+            if (node.fieldPath) module.write(ctx, "field", store.get(node.fieldPath));
+          },
+        });
+      }
     }
 
     mountContent(node, host);

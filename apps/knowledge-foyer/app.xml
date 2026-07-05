@@ -1,4 +1,4 @@
-<app title="Knowledge Foyer" version="0.3">
+<app title="Knowledge Foyer" version="0.4">
 
     <client style="style.css">
 
@@ -20,6 +20,10 @@
 
         <workspace type="layout" orient="vertical" visible="app.view: editor">
             <articleEditor type="text-editor" table="article_editions" record="app.currentEditionId" conflict="detect"/>
+            <tagBox type="layout" orient="vertical" table="articles" record="1">
+                Tags:
+                <tagPicker type="multi-select" field=".tags: tags.id->tags.name"/>
+            </tagBox>
             <readIt type="button" action='apskel.field.set(app.view, "article")'>Read it</readIt>
             <toLanding type="button" action='apskel.nav.go("/")'>Back to landing</toLanding>
         </workspace>
@@ -52,6 +56,7 @@
             <users>
                 <articles read="public" write="owner">
                     <article_editions read="public" write="owner"/>
+                    <tags read="public" write="none"/>
                 </articles>
             </users>
         </graph>

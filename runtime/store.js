@@ -92,7 +92,7 @@ export function createStore() {
 
   function write(path, value, origin) {
     const oldValue = values.get(path);
-    if (values.has(path) && Object.is(oldValue, value)) return false;
+    if (values.has(path) && sameValue(oldValue, value)) return false;
     values.set(path, value);
     const change = { path, value, oldValue, origin };
     for (const listener of listeners) listener(change);
@@ -100,6 +100,23 @@ export function createStore() {
   }
 
   return store;
+}
+
+// The value-change guard's equality: Object.is for scalars, ordered-
+// element comparison for arrays (Phase 7.3) — set fields carry member
+// arrays in canonical stored-key order, so this behaves as set equality
+// with exactly one equality rule, and an echo or refetch of an unchanged
+// set does not cascade.
+function sameValue(a, b) {
+  if (Object.is(a, b)) return true;
+  if (Array.isArray(a) && Array.isArray(b)) {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) {
+      if (!Object.is(a[i], b[i])) return false;
+    }
+    return true;
+  }
+  return false;
 }
 
 // Declaration defaults are restricted to literals by the resolver (quoted

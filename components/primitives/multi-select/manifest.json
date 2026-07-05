@@ -1,0 +1,5 @@
+{
+  "type": "multi-select",
+  "attributes": ["field"],
+  "input": true
+}

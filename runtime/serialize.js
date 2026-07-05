@@ -42,6 +42,10 @@ function nodeToJson(node, primitiveTypes) {
     attrs: { ...node.attrs },
     manifest: node.manifest ?? null,
     fieldPath: node.fieldSite ? storePathOf(node.fieldSite.binding) : null,
+    // An edge-bound input (multi-select) gets its option list at its OWN
+    // store path — runtime-owned state, filled via applyServerWrite, per
+    // RESOLVED (options are runtime state at the widget's own path).
+    optionsPath: node.fieldSite?.binding?.kind === "edge" ? `${node.path}.options` : null,
     action: node.actionSite ? functionToJson(node.actionSite.binding) : null,
     visible: node.visibleSite
       ? {
@@ -150,6 +154,43 @@ export function collectPermissions(root) {
     write: p.write,
     hops: p.hops.map((h) => ({ ...h })),
   }));
+}
+
+// Every edge-bound set field the app declares, per RESOLVED (a set field
+// is a domain-bearing edge reference): the store path holding the member
+// array, the context (with record/recordPath exactly like bound fields),
+// the edge and its stored/label columns, and the options descriptor the
+// widget's option list is fetched with. Startup introspection fills
+// joinTable/parentColumn/childColumn against the live schema.
+export function collectSetFields(root) {
+  const byStorePath = new Map();
+  for (const site of root.allRefs) {
+    const binding = site.binding;
+    if (!binding || binding.kind !== "edge") continue;
+    const storePath = storePathOf(binding);
+    if (byStorePath.has(storePath)) continue;
+    const target = binding.target;
+    const rawRecord = target.attrs.record ?? null;
+    const entry = {
+      storePath,
+      path: binding.targetPath,
+      table: binding.table,
+      edge: binding.edge,
+      record: target.recordSite
+        ? null
+        : rawRecord !== null && /^\d+$/.test(rawRecord)
+          ? Number(rawRecord)
+          : rawRecord,
+      stored: binding.stored,
+      label: binding.label,
+      join: binding.join,
+      options: { table: binding.edge, value: binding.stored, label: binding.label },
+      site: { file: site.file, line: site.line, ref: site.raw },
+    };
+    if (target.recordSite) entry.recordPath = storePathOf(target.recordSite.binding);
+    byStorePath.set(storePath, entry);
+  }
+  return [...byStorePath.values()];
 }
 
 export function findByPath(root, targetPath) {

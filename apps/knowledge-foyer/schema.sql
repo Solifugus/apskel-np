@@ -21,3 +21,21 @@ CREATE TABLE IF NOT EXISTS article_editions (
 INSERT INTO articles (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
 INSERT INTO article_editions (id, article_id) VALUES (1, 1) ON CONFLICT (id) DO NOTHING;
 INSERT INTO article_editions (id, article_id) VALUES (2, 1) ON CONFLICT (id) DO NOTHING;
+
+-- Phase 7.3: the tag vocabulary (interim read="public" write="none" —
+-- tag creation is Phase 8) and the join table the articles->tags edge
+-- introspects to. Never a graph node.
+CREATE TABLE IF NOT EXISTS tags (
+    id   integer PRIMARY KEY,
+    name text NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS article_tags (
+    article_id integer NOT NULL REFERENCES articles(id),
+    tag_id     integer NOT NULL REFERENCES tags(id),
+    PRIMARY KEY (article_id, tag_id)
+);
+
+INSERT INTO tags (id, name) VALUES
+    (1, 'concepts'), (2, 'drafting'), (3, 'philosophy'), (4, 'practice')
+ON CONFLICT (id) DO NOTHING;

@@ -47,8 +47,30 @@ export function resolveReferences(root) {
   for (const site of root.allRefs) {
     registerDeclaration(site);
   }
+  // Edges marked as join edges by set-field references, filled during
+  // resolution and checked by the owner-walk pass below. Key: "parent->child".
+  root.edgeRefs = new Map(); // key -> the first marking site
   for (const site of root.allRefs) {
     resolveSite(site, root);
+  }
+  // The owner walk refuses to cross a join edge, per RESOLVED (the graph
+  // has two edge kinds). A set-field reference marks its edge as a join
+  // edge in the XML itself, so this case is load-knowable; without such a
+  // reference the same mistake surfaces at startup (no child->parent FK).
+  for (const p of root.data?.permissions ?? []) {
+    if (p.read !== "owner" && p.write !== "owner") continue;
+    for (const hop of p.hops) {
+      const marker = root.edgeRefs.get(`${hop.parent}->${hop.child}`);
+      if (marker) {
+        throw new ApskelLoadError(
+          `<${p.table}> declares an 'owner' rule but its path to 'users' crosses the ` +
+            `join edge ${hop.parent}->${hop.child} (marked as a join edge by the set ` +
+            `field at ${marker.file}:${marker.line}) — the owner walk refuses to cross ` +
+            `a join edge; join edges confer no ownership`,
+          { file: p.file, line: p.line }
+        );
+      }
+    }
   }
   return root;
 }
@@ -96,7 +118,7 @@ function resolveSite(site, root) {
       site.binding = resolveLocal(site, expr);
       break;
     case "bound":
-      site.binding = resolveBound(site, expr);
+      site.binding = resolveBound(site, expr, root);
       break;
     case "named":
       site.binding = resolveNamed(site, expr, root);
@@ -185,15 +207,79 @@ function resolveLocal(site, expr) {
 
 // --- bound: {.field} --------------------------------------------------------
 
-function resolveBound(site, expr) {
+function resolveBound(site, expr, root) {
   const field = expr.slice(1);
   if (!field) fail(site, `malformed bound reference '${expr}'`);
   for (let n = site.owner; n; n = n.parent) {
     if (n.attrs.table) {
+      // Edge classification is by graph declaration, at load, period —
+      // per RESOLVED (a set field is a domain-bearing edge reference),
+      // Ruling 3: a name matching a declared graph child of the context's
+      // table is an edge reference, never reclassified. A collision with
+      // an actual column of the same name is a startup error (only the
+      // schema knows columns).
+      const edge = root.data?.children?.get(n.attrs.table)?.get(field);
+      if (edge) {
+        return resolveEdge(site, n, field, edge, root);
+      }
       return { kind: "bound", target: n, targetPath: n.path, table: n.attrs.table, field };
     }
   }
   fail(site, `bound field '${expr}' has no data context: no enclosing component declares table=`);
+}
+
+// An edge reference is multi-valued and its domain is mandatory: the
+// domain carries the stored/display contract, and on an edge the arrow
+// form is the only legal item — the stored value is not the author's
+// choice (it must be the join FK's referenced column, checked at
+// startup; the FORM is checked here). Literals cannot be membership rows.
+function resolveEdge(site, contextNode, edgeName, edgeDecl, root) {
+  const table = contextNode.attrs.table;
+  if (site.domain === null || site.domain === undefined || site.domain === "") {
+    fail(
+      site,
+      `'.${edgeName}' is an edge reference (declared graph child of '${table}') and ` +
+        `requires a domain — {.${edgeName}: ${edgeName}.<key>->${edgeName}.<label>}`
+    );
+  }
+  const items = splitArgs(site.domain);
+  const ARROW = /^([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)->([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)$/;
+  if (items.length !== 1) {
+    fail(
+      site,
+      `an edge domain is a single ${edgeName}.<key>->${edgeName}.<label> item — a ` +
+        `literal cannot be a membership row, and mixed domains are column-domain features`
+    );
+  }
+  const m = items[0].match(ARROW);
+  if (!m) {
+    fail(
+      site,
+      `the arrow form is mandatory on an edge reference — the stored value is not the ` +
+        `author's choice ('.${edgeName}' got '${items[0]}'; want ` +
+        `${edgeName}.<key>->${edgeName}.<label>)`
+    );
+  }
+  const [, storedTable, stored, labelTable, label] = m;
+  if (storedTable !== edgeName || labelTable !== edgeName) {
+    fail(
+      site,
+      `the edge domain's table must be the edge's own table '${edgeName}' — got ` +
+        `'${storedTable}.${stored}->${labelTable}.${label}'`
+    );
+  }
+  root.edgeRefs.set(`${table}->${edgeName}`, site);
+  return {
+    kind: "edge",
+    target: contextNode,
+    targetPath: contextNode.path,
+    table,
+    edge: edgeName,
+    field: edgeName,
+    stored,
+    label,
+    join: edgeDecl.join ?? null,
+  };
 }
 
 // --- named: {name.field} ----------------------------------------------------

@@ -52,6 +52,7 @@ let functions = {};
 let credentials = null;
 let recordContexts = null; // assigned below; onToken refetches through it
 let reconnectEvents = () => {}; // assigned below; onToken re-identifies the SSE feed
+let refetchOptions = () => {}; // assigned below; onToken can unlock option lists
 
 const postWire = (envelope) =>
   fetch(bundle.wire?.endpoint ?? "/wire", {
@@ -91,6 +92,7 @@ if (bundle.auth) {
     // reconnect to start receiving users/owner-scoped broadcasts.
     recordContexts?.refetchAll();
     reconnectEvents();
+    refetchOptions();
   };
 
   functions = createFrameworkFunctions({ call, store, credentials, onToken });
@@ -160,6 +162,7 @@ if (bundle.wire) {
     engine,
     store,
     bound: bundle.bound,
+    setFields: bundle.setFields ?? [],
     revisions,
     call,
     skipInitial: new Set(Object.keys(bundle.initialData ?? {})),
@@ -168,6 +171,7 @@ if (bundle.wire) {
   attachWireSend({
     engine,
     bound: bundle.bound,
+    setFields: bundle.setFields ?? [],
     clientId,
     revisions,
     isLoading: recordContexts.isLoading,
@@ -207,7 +211,55 @@ if (bundle.wire) {
       }
     },
   });
-  const handleEvent = attachWireReceive({ store, bound: bundle.bound, clientId, revisions });
+  const handleEvent = attachWireReceive({
+    store,
+    bound: bundle.bound,
+    setFields: bundle.setFields ?? [],
+    clientId,
+    revisions,
+  });
+
+  // Option lists for edge-bound widgets: fetched at mount into the
+  // widget's OWN options path via the server-origin door, refetched on
+  // login (a token can unlock a users-read options table) and on
+  // selection change for dynamic contexts. Failure = empty options +
+  // warning, no retry — per RESOLVED (options are runtime state at the
+  // widget's own path).
+  {
+    const setByStore = new Map((bundle.setFields ?? []).map((s) => [s.storePath, s]));
+    const optionWidgets = [];
+    (function walk(n) {
+      if (n.optionsPath && setByStore.has(n.fieldPath)) {
+        optionWidgets.push({ s: setByStore.get(n.fieldPath), optionsPath: n.optionsPath });
+      }
+      for (const child of n.children) walk(child);
+    })(root);
+    const fetchOne = async ({ s, optionsPath }) => {
+      try {
+        const resp = await call({ type: "apskel.data.options", ...s.options });
+        if (resp?.ok) {
+          store.applyServerWrite(optionsPath, resp.options);
+        } else {
+          store.applyServerWrite(optionsPath, []);
+          console.warn(`[apskel] options for ${s.storePath} unavailable:`, resp?.error);
+        }
+      } catch (e) {
+        store.applyServerWrite(optionsPath, []);
+        console.warn(`[apskel] options fetch for ${s.storePath} failed:`, e);
+      }
+    };
+    refetchOptions = () => optionWidgets.forEach(fetchOne);
+    for (const w of optionWidgets) {
+      fetchOne(w);
+      if (w.s.recordPath) {
+        engine.watch({
+          name: `options-refetch:${w.optionsPath}`,
+          fields: [w.s.recordPath],
+          run: () => fetchOne(w),
+        });
+      }
+    }
+  }
   // EventSource cannot set headers: the token rides the query string, and
   // the connection's identity is fixed at connect — so a token change
   // (login) reconnects, per RESOLVED (broadcasts obey read rules).

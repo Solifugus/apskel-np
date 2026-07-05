@@ -191,7 +191,9 @@ export function loadApp(appXmlPath, options = {}) {
   root.routes = routesEl ? buildRoutes(routesEl, root, ctx) : [];
 
   const dataEl = rawRoot.children.find((c) => c.tag === "data");
-  root.data = dataEl ? buildData(dataEl) : { permissions: [] };
+  root.data = dataEl
+    ? buildData(dataEl)
+    : { permissions: [], children: new Map(), nodes: new Map() };
 
   root.allRefs = ctx.allRefs;
   root.appWideNames = ctx.appWideNames;
@@ -253,12 +255,19 @@ function buildRoutes(routesEl, root, ctx) {
 // <data> at app level: <graph> elements whose nested table nodes carry the
 // permission rules. The loader validates the closed menus, the one-
 // declaration-site rule, the identity-table lock, and that every owner
-// rule has a graph path to users; it records via= where written. FK
-// COLUMNS are deliberately absent here — resolving them needs the live
-// schema and is server startup's job.
+// rule has a graph path to users; it records via= and join= where
+// written. FK COLUMNS and join-table identities are deliberately absent
+// here — resolving them needs the live schema and is server startup's
+// job, per RESOLVED (error taxonomy: load vs. startup).
+//
+// Phase 7.3: alongside permissions, the declared parent->child structure
+// is recorded (root.data.children) — edge classification for set fields
+// is by graph declaration, at load, per the set-field entry's Ruling 3.
 function buildData(dataEl) {
   const permissions = [];
   const declaredAt = new Map(); // table -> {file, line} of its rule-bearing node
+  const children = new Map(); // parent table -> Map(child table -> {via, join, file, line})
+  const nodes = new Map(); // every declared graph node tag -> first {file, line}
 
   for (const graphEl of dataEl.children) {
     if (!graphEl.tag) continue;
@@ -270,7 +279,7 @@ function buildData(dataEl) {
       if (child.tag) walkGraphNode(child, []);
     }
   }
-  return { permissions };
+  return { permissions, children, nodes };
 
   // ancestors: [{table, via}] from the immediate parent up to the graph root.
   function walkGraphNode(el, ancestors) {
@@ -279,10 +288,10 @@ function buildData(dataEl) {
       throw new ApskelLoadError(`graph node <${el.tag}> is not a valid table name`, at);
     }
     for (const key of Object.keys(el.attrs)) {
-      if (key !== "read" && key !== "write" && key !== "via") {
+      if (key !== "read" && key !== "write" && key !== "via" && key !== "join") {
         throw new ApskelLoadError(
           `unknown attribute '${key}' on graph node <${el.tag}> — graph nodes take ` +
-            `read=, write=, via=`,
+            `read=, write=, via=, join=`,
           at
         );
       }
@@ -290,6 +299,19 @@ function buildData(dataEl) {
     const via = el.attrs.via;
     if (via !== undefined && !SQL_IDENT.test(via)) {
       throw new ApskelLoadError(`via='${via}' on <${el.tag}> is not a valid column name`, at);
+    }
+    const join = el.attrs.join;
+    if (join !== undefined && !SQL_IDENT.test(join)) {
+      throw new ApskelLoadError(`join='${join}' on <${el.tag}> is not a valid table name`, at);
+    }
+    if (!nodes.has(el.tag)) nodes.set(el.tag, at);
+    if (ancestors.length > 0) {
+      const parentTable = ancestors[0].table;
+      const sibs = children.get(parentTable) ?? new Map();
+      if (!sibs.has(el.tag)) {
+        sibs.set(el.tag, { via: via ?? null, join: join ?? null, file: el.file, line: el.line });
+      }
+      children.set(parentTable, sibs);
     }
     const { read, write } = el.attrs;
 
@@ -356,6 +378,8 @@ function buildData(dataEl) {
         read: effRead,
         write: effWrite,
         hops: found ? hops : [],
+        file: el.file,
+        line: el.line,
       });
     }
 
