@@ -1,0 +1,19 @@
+<app title="Stored Column Contradicts The Join FK" version="0.1">
+
+    <client>
+
+        <editor type="layout" orient="vertical" table="sc_articles" record="1">
+            Tags: {.sc_tags: sc_tags.name->sc_tags.name}
+        </editor>
+
+    </client>
+
+    <data>
+        <graph name="g">
+            <sc_articles>
+                <sc_tags/>
+            </sc_articles>
+        </graph>
+    </data>
+
+</app>

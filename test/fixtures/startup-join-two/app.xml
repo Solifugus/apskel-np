@@ -1,0 +1,19 @@
+<app title="Two Join Candidates" version="0.1">
+
+    <client>
+
+        <editor type="layout" orient="vertical" table="j2_articles" record="1">
+            Tags: {.j2_tags: j2_tags.id->j2_tags.name}
+        </editor>
+
+    </client>
+
+    <data>
+        <graph name="g">
+            <j2_articles>
+                <j2_tags/>
+            </j2_articles>
+        </graph>
+    </data>
+
+</app>

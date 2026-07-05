@@ -1,0 +1,19 @@
+<app title="No Join Table" version="0.1">
+
+    <client>
+
+        <editor type="layout" orient="vertical" table="jn_articles" record="1">
+            Tags: {.jn_tags: jn_tags.id->jn_tags.name}
+        </editor>
+
+    </client>
+
+    <data>
+        <graph name="g">
+            <jn_articles>
+                <jn_tags/>
+            </jn_articles>
+        </graph>
+    </data>
+
+</app>

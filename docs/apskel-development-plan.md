@@ -273,10 +273,12 @@ own id and token → your row, another id → 403, any data.set on `users` →
 Implements design session 3 (item 4 of the five gaps). Deliverables:
 
 * Edge-bound set fields: `{.tags: tags.id->tags.name}` binds to the graph
-  edge when the context table has a graph child of that name; arrow form
-  mandatory on an edge (stored column validated against the join FK's
-  referenced column at startup); bare form, missing domain, and
-  literal/mixed domains on an edge are load errors naming the site.
+  edge when the context table has a graph child of that name — edge
+  classification is by graph declaration at load, never reclassified; a
+  declared-edge-name vs. actual-column collision is a startup error naming
+  both. Arrow form mandatory on an edge (stored column validated against
+  the join FK's referenced column at startup); bare form, missing domain,
+  and literal/mixed domains on an edge are load errors naming the site.
 * Two edge kinds in the graph: FK edges (7.2, ownership-walkable) and join
   edges (join table introspected at startup; `join=` disambiguates;
   declaring a join table as a graph node is an error; the owner walk

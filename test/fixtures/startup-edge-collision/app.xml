@@ -1,0 +1,19 @@
+<app title="Edge Name Collides With A Column" version="0.1">
+
+    <client>
+
+        <editor type="layout" orient="vertical" table="ec_articles" record="1">
+            Tags: {.ec_tags: ec_tags.id->ec_tags.name}
+        </editor>
+
+    </client>
+
+    <data>
+        <graph name="g">
+            <ec_articles>
+                <ec_tags/>
+            </ec_articles>
+        </graph>
+    </data>
+
+</app>

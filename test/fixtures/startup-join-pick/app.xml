@@ -1,0 +1,19 @@
+<app title="Join Attribute Picks Among Candidates" version="0.1">
+
+    <client>
+
+        <editor type="layout" orient="vertical" table="j3_articles" record="1">
+            Tags: {.j3_tags: j3_tags.id->j3_tags.name}
+        </editor>
+
+    </client>
+
+    <data>
+        <graph name="g">
+            <j3_articles>
+                <j3_tags join="j3_map_a"/>
+            </j3_articles>
+        </graph>
+    </data>
+
+</app>

@@ -538,10 +538,9 @@ column, per RESOLVED (a set field is a domain-bearing edge reference):
 * The widget's `options` path is the instance's own store path — checked
   in the harness, owned by the runtime, filled via `applyServerWrite`.
 * `tags` carries `read="public" write="none"` but **no owner rule**, so
-  its ancestor hops are NOT FK-resolved at startup — a join edge between
-  `tags` and `articles` is not an error here. (Hop columns resolve only
-  for tables whose read or write rule is `owner`; anything else would make
-  every join-edge child a spurious startup failure.)
+  its ancestor hops are NOT FK-resolved at startup — per the hop-narrowing
+  sentence in RESOLVED (owner is a graph walk); the design doc is the
+  authoritative statement, this is a pointer.
 
 ### fail-edge-no-domain/ — must fail at load
 
@@ -569,19 +568,41 @@ error class as "no graph path to users". (Without a set-field reference
 marking the edge, the same mistake surfaces at startup instead, when
 introspection finds no child→parent FK.)
 
-### Startup checks (fake introspection in the harness — schema-dependent,
-### so no loader fixture is possible)
+### Startup fixtures — schema variant per case, verified the 7.2 way
 
-* Join-edge resolution for a set field: zero join-table candidates →
-  startup error; two candidates → startup error naming both; `join=` on
-  the child graph node picks one; `join=` naming a non-candidate → error.
-* Stored-column contract: the domain's stored column must equal the column
-  the join table's FK references — mismatch is a startup error naming the
-  site and both columns.
+Run `node tools/run.js test/fixtures/<name>` and read the error in the
+terminal; the harness also covers each with fake introspection, but the
+terminal is the proof. Each fixture uses prefixed table names so the
+shared database never gains look-alike app tables. Cleanup after
+verifying:
+
+    DROP TABLE IF EXISTS ec_article_tags, ec_articles, ec_tags,
+      jn_articles, jn_tags, om_tags, om_articles,
+      j2_map_a, j2_map_b, j2_articles, j2_tags,
+      j3_map_a, j3_map_b, j3_articles, j3_tags,
+      sc_article_tags, sc_articles, sc_tags CASCADE;
+
+* `startup-edge-collision/` — a column named `ec_tags` on `ec_articles`
+  alongside the declared `ec_tags` graph child: edge classification is by
+  declaration at load (Ruling 3 in the set-field entry), and the collision
+  is a **startup error naming both** the edge and the column.
+* `startup-join-none/` — declared edge, no join table and no FK between
+  the endpoints → startup error (a set field needs a join edge).
+* `startup-edge-onetomany/` — `om_tags.article_id` is a direct FK to
+  `om_articles`, no join table → startup error: a one-to-many FK edge
+  cannot be a set field.
+* `startup-join-two/` — `j2_map_a` and `j2_map_b` both join the endpoints
+  → startup error naming both candidates.
+* `startup-join-pick/` — same two-candidate shape, `join="j3_map_a"` on
+  the child graph node → the server STARTS (the success case; the terminal
+  shows the normal startup lines). `join=` naming a non-candidate is the
+  error case, covered in the harness.
+* `startup-edge-stored/` — domain `sc_tags.name->sc_tags.name` while the
+  join FK references `sc_tags.id` → startup error naming the site and both
+  columns (the stored value is not the author's choice).
 * A join table declared as a graph node → startup error naming it (only
-  the schema identifies join tables).
-* A one-to-many FK edge used as a set field → startup error (membership
-  requires a join edge).
+  the schema identifies join tables) — covered in the harness with fake
+  introspection.
 
 ### Wire membership (fake db, real HTTP)
 

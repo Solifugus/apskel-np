@@ -870,14 +870,15 @@ Widget type should usually be inferred automatically.
 
 Examples:
 
-| Domain          | Widget               |
-| --------------- | -------------------- |
-| none            | text input           |
-| two values      | toggle               |
-| multiple values | dropdown/select      |
-| regex           | validated text input |
-| table values    | dynamic select       |
-| mixed           | combo input          |
+| Domain            | Widget               |
+| ----------------- | -------------------- |
+| none              | text input           |
+| two values        | toggle               |
+| multiple values   | dropdown/select      |
+| regex             | validated text input |
+| table values      | dynamic select       |
+| mixed             | combo input          |
+| edge-bound domain | multi-select         |
 
 ---
 
@@ -1437,6 +1438,7 @@ Tentative widget inference:
 | regex only        | validated text input        |
 | table values      | dynamic select              |
 | mixed values      | combo input                 |
+| edge-bound domain | multi-select                |
 
 DECISION-POINT: Confirm whether string literals must always be quoted.
 
@@ -1945,6 +1947,15 @@ exactly as typing the URL would, then pushes the URL. `field.set` and
 follow, or set the URL and let state follow. Neither is a second navigation
 system.
 
+RESOLVED (error taxonomy: load vs. startup): two error classes, one
+developer experience. **Load errors** are XML-knowable — grammar, closed
+menus, reference resolution, anything decidable from `app.xml` and the
+component files alone. **Startup errors** are schema-dependent — FK
+introspection, join-table identification, column contracts, anything only
+the live database can decide. Both exit 1 naming the site before the
+server accepts a connection; neither ever surfaces at runtime. Entries
+below cite this taxonomy instead of re-deriving it per case.
+
 RESOLVED (permission rules live on the data graph): the `<data><graph>`
 section — designed from the beginning, parsed by nothing until Phase 7.2 —
 becomes real, and permission rules ride on its nodes, because ownership *is*
@@ -1983,7 +1994,11 @@ candidates, resolved by a `via="column"` attribute on the child node. A
 and unowned denies** — the safe floor; a row acquires an owner by being
 created by someone (Phase 8's INSERT path) or by explicit SQL until then. A
 table carrying an `owner` rule without a graph path to `users` is a
-load-time error. One parameterized SQL query per guarded operation.
+load-time error. One parameterized SQL query per guarded operation. Hop
+columns FK-resolve at startup **only for tables whose read or write rule
+is `owner`** — a non-owner node's ancestor path may legitimately cross a
+join edge (Phase 7.3), and resolving hops nobody walks would reject
+configurations the membership entries themselves prescribe.
 
 RESOLVED (enforcement is server-side at every Wire door): `apskel.data.get`
 checks the table's read rule and `apskel.data.set` its write rule, before
@@ -2037,20 +2052,25 @@ exposes drafts in the interim slice.
 RESOLVED (a set field is a domain-bearing edge reference): `{.tags:
 tags.id->tags.name}` — when the data context's table has a declared graph
 child named `tags`, the reference binds to that **edge**, and the field is
-multi-valued: its store value is an **array of stored keys**. The domain is
-mandatory on an edge reference, and on an edge the **arrow form is
-mandatory**: the stored value is not the author's choice — it must be the
-column the join table's FK references, validated at startup (the earliest
-the schema is known) with a mismatch error naming the site and both
-columns. The bare form (`{.tags: tags.name}`) on an edge is a load-time
-error — no implicit key, consistent with no implicit set-ness — and
-literal items or mixed domains on an edge reference are likewise load
-errors: a literal cannot be a membership row. A bare `{.tags}` with no
-domain at all is a load-time error naming the site. Nothing else changes:
-a name that matches a column stays a column; there is no implicit set-ness
-anywhere. Empty context: a set field reads `undefined` (not `[]`) when the
-selection is null, sends suppressed — the same contract as every other
-field.
+multi-valued: its store value is an **array of stored keys**. Edge
+classification is **by graph declaration, at load**: a field reference
+whose name matches a declared graph child of the data context's graph
+position is an edge reference, classified at load, period — no
+reclassification after load, ever. A collision between a declared graph
+child name and an actual column on the context table is a startup error
+naming both; the author resolves it by renaming one. "A name that matches
+a column stays a column" governs only names with no declared edge — the
+trivial case. The domain is mandatory on an edge reference, and on an edge
+the **arrow form is mandatory**: the stored value is not the author's
+choice — it must be the column the join table's FK references, validated
+at startup with a mismatch error naming the site and both columns. The
+bare form (`{.tags: tags.name}`) on an edge is a load error — no implicit
+key, consistent with no implicit set-ness — and literal items or mixed
+domains on an edge reference are likewise load errors: a literal cannot be
+a membership row. A bare `{.tags}` with no domain at all is a load error
+naming the site. There is no implicit set-ness anywhere. Empty context: a
+set field reads `undefined` (not `[]`) when the selection is null, sends
+suppressed — the same contract as every other field.
 
 RESOLVED (the graph has two edge kinds; join tables are machinery): an
 edge is either an **FK edge** (introspected child→parent FK — ownership-
@@ -2418,7 +2438,7 @@ Knowledge Foyer tests the early framework features:
                             <comment_marks/>
                         </comments>
                     </article_editions>
-                    <tags/>
+                    <tags read="public" write="none"/>
                 </articles>
                 <expositions>
                     <exposition_tag_rules/>

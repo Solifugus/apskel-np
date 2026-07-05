@@ -1,0 +1,19 @@
+<app title="One-To-Many Edge As A Set Field" version="0.1">
+
+    <client>
+
+        <editor type="layout" orient="vertical" table="om_articles" record="1">
+            Tags: {.om_tags: om_tags.id->om_tags.name}
+        </editor>
+
+    </client>
+
+    <data>
+        <graph name="g">
+            <om_articles>
+                <om_tags/>
+            </om_articles>
+        </graph>
+    </data>
+
+</app>
