@@ -116,13 +116,12 @@ export function hydrateApp(treeJson) {
 // the result rides in the bundle and doubles as the server's allowlist.
 export function collectBoundFields(root) {
   const byStorePath = new Map();
-  for (const site of root.allRefs) {
-    const binding = site.binding;
-    if (!binding || binding.kind !== "bound") continue;
-    if (!binding.table) continue; // query-context fields: collectQueryBound
-    if (binding.target.isCollection) continue; // template refs: collectCollections
+  function add(binding) {
+    if (!binding || binding.kind !== "bound") return;
+    if (!binding.table) return; // query-context fields: collectQueryBound
+    if (binding.target.isCollection) return; // template refs: collectCollections
     const storePath = storePathOf(binding);
-    if (byStorePath.has(storePath)) continue;
+    if (byStorePath.has(storePath)) return;
     const target = binding.target;
     const rawRecord = target.attrs.record ?? null;
     // A fixed row is a number; a dynamic selection ships as recordPath —
@@ -142,6 +141,18 @@ export function collectBoundFields(root) {
     };
     if (target.recordSite) entry.recordPath = storePathOf(target.recordSite.binding);
     byStorePath.set(storePath, entry);
+  }
+  for (const site of root.allRefs) {
+    add(site.binding);
+    // Function-call arguments (the next-edition composer's .article_id)
+    // are sub-bindings inside the call, not allRefs entries — read at
+    // press time, so their columns must be fetched like any bound field.
+    // Same lesson collectCollections learned in Phase 8.
+    if (site.binding?.kind === "function") {
+      for (const a of site.binding.args) {
+        if (a.kind === "ref") add(a.binding);
+      }
+    }
   }
   return [...byStorePath.values()];
 }

@@ -2235,7 +2235,11 @@ symmetric with the rest of the data surface:
   the client can never claim ownership (a client-supplied value for that
   column is overwritten, not trusted). A `write="owner"` table with no
   direct users FK rejects inserts at startup validation: the row would be
-  born unowned and dead by the unowned-denies floor. The server assigns
+  born unowned and dead by the unowned-denies floor. (Amended, design
+  session 5: ownership at birth may also arrive through the owner walk —
+  see RESOLVED (ownership at birth may arrive through the walk); the
+  startup rejection narrows to tables whose insertable columns could
+  never establish ownership.) The server assigns
   the id (identity/serial column), returns the new row, and broadcasts
   `apskel.data.inserted {table, id, values}` scoped by the read rule.
 * `apskel.data.delete {table, id}` — write rule plus the owner walk,
@@ -2338,12 +2342,32 @@ introspection, and `write="owner"` with no direct users FK is the same
 born-unowned-and-dead startup error. Nothing becomes insertable that the
 app's own XML does not name.
 
+RESOLVED (ownership at birth may arrive through the walk) — amending the
+session-4 row-creation entry, whose direct-FK-only rule the next-edition
+composer broke on contact: `article_editions` is `write="owner"` with no
+direct users FK, yet an edition born with `article_id` set IS owned —
+through the walk. So, for a `write="owner"` insert into a table with no
+direct users FK: the insert must carry the owner walk's first hop column
+among its values, and the server walks the REFERENCED parent row's
+ownership before inserting — you may only give birth into rows you
+already own (403 otherwise; a missing or unowned parent denies, the
+unowned-denies floor at birth). The direct-FK stamp remains the rule
+when it exists. The startup check refines accordingly: born-unowned-
+and-dead now rejects a `write="owner"` insert target only when its
+insertable columns could never establish ownership — no direct users FK
+to stamp AND the walk's first hop column absent from the table's
+insert-allowlisted columns. (The session-4 entry is amended in place
+with a pointer here.)
+
 RESOLVED (the KF v1.0 shape): the target the entries above serve.
 
 * Schema: `article_editions` gains `status` (`draft` | `published`,
   default `draft`) and `published_at`; `comments (id, edition_id FK,
-  created_by FK users, body, created_at)`; `comment_marks (comment_id
-  FK, user_id FK users, kind, PRIMARY KEY (comment_id, user_id))`;
+  created_by FK users, body, created_at)`; `comment_marks (id,
+  comment_id FK, user_id FK users, kind, UNIQUE (comment_id, user_id))`
+  — a surrogate id rather than the composite PK, because rows are
+  id-addressable by framework contract (insert RETURNING id, broadcasts
+  carry id); the UNIQUE constraint is what makes marks insert-once;
   `expositions` and `exposition_tag_rules` per the sketch. The
   immutability trigger on published editions lives here.
 * The read flip, cashing the promise in RESOLVED (the query is the
@@ -2666,15 +2690,18 @@ Knowledge Foyer tests the early framework features:
         <graph name="knowledge">
             <users>
                 <articles>
-                    <article_editions read="owner" write="owner">
-                        <comments read="public" write="owner">
-                            <comment_marks write="owner"/>
-                        </comments>
-                    </article_editions>
+                    <article_editions read="owner" write="owner"/>
                     <tags read="public" write="none"/>
                 </articles>
-                <expositions>
-                    <exposition_tag_rules/>
+                <!-- comments and marks are owned by their AUTHOR (the
+                     direct users FK the insert stamps) — a comment by
+                     its commenter, a mark by its marker — so each hangs
+                     off users directly and the owner walk is one hop.
+                     Rules ride their exposition's owner, so they nest. -->
+                <comments read="public" write="owner"/>
+                <comment_marks read="public" write="owner"/>
+                <expositions read="public" write="owner">
+                    <exposition_tag_rules read="public" write="owner"/>
                 </expositions>
             </users>
         </graph>

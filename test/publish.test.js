@@ -262,6 +262,52 @@ console.log("\nstartup — create-target validation (terminal verification: star
     "a create target's ownership stamp resolves from its direct users FK",
     stamps.get("comment_marks") === "user_id"
   );
+
+  // The refined floor, per RESOLVED (ownership at birth may arrive
+  // through the walk): no stamp is fine when the walk's first hop column
+  // is insertable — and rejected when it is not.
+  const editionsPerm = [
+    {
+      table: "article_editions",
+      read: "owner",
+      write: "owner",
+      hops: [
+        { child: "article_editions", parent: "articles", via: null, column: "article_id" },
+        { child: "articles", parent: "users", via: null, column: "created_by" },
+      ],
+    },
+  ];
+  const walkStamps = await resolveCollections(
+    introDb({ columns: new Set(["article_editions.article_id", "article_editions.title"]) }),
+    {
+      collections: [],
+      permissions: editionsPerm,
+      insertTargets: [target("article_editions", ["article_id", "title"])],
+    }
+  );
+  check(
+    "write=owner with no stamp is fine when the walk's first hop column is insertable",
+    walkStamps.get("article_editions") === null
+  );
+
+  let noHopCol = null;
+  try {
+    await resolveCollections(
+      introDb({ columns: new Set(["article_editions.title"]) }),
+      {
+        collections: [],
+        permissions: editionsPerm,
+        insertTargets: [target("article_editions", ["title"])],
+      }
+    );
+  } catch (e) {
+    noHopCol = e.message;
+  }
+  check(
+    "…and rejected when the hop column is not insertable (born unowned and dead)",
+    noHopCol !== null && noHopCol.includes("article_id") && noHopCol.includes("born unowned and dead"),
+    noHopCol
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -306,14 +352,20 @@ console.log("\nserver — @user from the token, create-declared inserts, DB reje
       columns: ["title"],
     },
   ];
-  const insertTargets = [{ table: "comment_marks", columns: ["comment_id", "kind"], site: { file: "app.xml", line: 5 } }];
+  const insertTargets = [
+    { table: "comment_marks", columns: ["comment_id", "kind"], site: { file: "app.xml", line: 5 } },
+    { table: "article_editions", columns: ["article_id", "title"], site: { file: "app.xml", line: 6 } },
+  ];
   const rejectTables = new Set();
   const dbQueries = [];
   const fakeDb = {
     query: async (sql, params = []) => {
       dbQueries.push({ sql, params });
+      // A trigger fires on writes; reads (the owner walk) pass through.
       for (const t of rejectTables) {
-        if (sql.includes(`"${t}"`)) throw new Error(`published editions are immutable (trigger says no)`);
+        if (sql.includes(`"${t}"`) && /^(INSERT|UPDATE|DELETE)/.test(sql)) {
+          throw new Error(`published editions are immutable (trigger says no)`);
+        }
       }
       if (sql.includes("AS owner")) return { rows: [{ owner: 7 }] };
       if (sql.startsWith("INSERT")) return { rowCount: 1, rows: [{ id: 42 }] };
@@ -329,11 +381,27 @@ console.log("\nserver — @user from the token, create-declared inserts, DB reje
     db: fakeDb,
     bound: [{ table: "article_editions", field: "title", path: "app.editor", storePath: "app.editor.title", record: 1, conflict: "offline-readonly" }],
     auth,
-    permissions: [{ table: "article_editions", read: "users", write: "users", hops: [] }],
+    permissions: [
+      {
+        table: "article_editions",
+        read: "users",
+        write: "owner",
+        hops: [
+          { child: "article_editions", parent: "articles", via: null, column: "article_id" },
+          { child: "articles", parent: "users", via: null, column: "created_by" },
+        ],
+      },
+      {
+        table: "articles",
+        read: "public",
+        write: "owner",
+        hops: [{ child: "articles", parent: "users", via: null, column: "created_by" }],
+      },
+    ],
     collections: colls,
     queries: queriesResolved,
     queryBound: [{ storePath: "app.reader.title", path: "app.reader", query: "myDrafts", args: [], record: null, recordPath: "app.currentId", field: "title" }],
-    insertStamps: new Map([["comment_marks", "user_id"]]),
+    insertStamps: new Map([["comment_marks", "user_id"], ["article_editions", null]]),
     insertTargets,
     log: { error: () => {} },
   });
@@ -414,6 +482,38 @@ console.log("\nserver — @user from the token, create-declared inserts, DB reje
   check(
     "create actions declare INSERT targets, nothing wider: delete on one -> 400",
     markDel.status === 400
+  );
+
+  // Ownership at birth through the walk: the fake owner of everything is
+  // user 7 (the "AS owner" answer), so 7 may start a next edition on
+  // article 1 and 8 may not.
+  dbQueries.length = 0;
+  const nextEd = await post(
+    { type: "apskel.data.insert", table: "article_editions", values: { article_id: 1, title: "v2" } },
+    tokenFor(7)
+  );
+  const nextEdQuery = dbQueries.find((q) => q.sql.startsWith("INSERT"));
+  check(
+    "walk-at-birth: the parent row's owner may insert (no stamp column added)",
+    nextEd.status === 200 &&
+      nextEdQuery.sql === 'INSERT INTO "article_editions" ("article_id", "title") VALUES ($1, $2) RETURNING id' &&
+      eq(nextEdQuery.params, [1, "v2"]),
+    JSON.stringify(nextEdQuery)
+  );
+
+  const nextEdOther = await post(
+    { type: "apskel.data.insert", table: "article_editions", values: { article_id: 1, title: "theft" } },
+    tokenFor(8)
+  );
+  check("walk-at-birth: a non-owner of the parent row -> 403", nextEdOther.status === 403);
+
+  const nextEdNoParent = await post(
+    { type: "apskel.data.insert", table: "article_editions", values: { title: "orphan" } },
+    tokenFor(7)
+  );
+  check(
+    "walk-at-birth: a missing parent FK denies (unowned-denies at birth) -> 403",
+    nextEdNoParent.status === 403
   );
 
   rejectTables.add("comment_marks");

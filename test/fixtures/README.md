@@ -772,10 +772,13 @@ terminal. Cleanup after verifying:
   column `bodyy` where the table has `body` → startup error naming the
   action site, the table, and the missing column.
 * `startup-create-unowned/` — the create target `cu_items` is
-  `write="owner"` and owner-WALKABLE (via `cu_projects` → `users`) but
-  has no DIRECT users FK, so an insert cannot be ownership-stamped at
-  birth → the born-unowned-and-dead startup error. The walk being fine
-  is the point: field writes would guard, only insertion is impossible.
+  `write="owner"`, has no direct users FK to stamp, and the create
+  action's columns (`body`) do not include the owner walk's first hop
+  column (`project_id`) — so no insert could ever establish ownership →
+  the born-unowned-and-dead startup error, in its refined form per
+  RESOLVED (ownership at birth may arrive through the walk). A create
+  action that did carry `project_id` would be legal: the server walks
+  the referenced parent's ownership at insert time instead.
 
 ### Wire behavior (fake db, with Phase 9's harness)
 
@@ -792,3 +795,8 @@ terminal. Cleanup after verifying:
 * DB rejections on `apskel.data.set` / `.delete` (e.g. the KF published-
   edition immutability trigger) answer 400 carrying the database's
   message, as insert already does — never a 500.
+* Ownership at birth through the walk: a `write="owner"` insert with no
+  direct users FK must carry the walk's first hop column, and the
+  referenced parent row must already belong to the caller — the owner
+  inserts a next edition into their own article (200), anyone else or a
+  missing parent gets 403.

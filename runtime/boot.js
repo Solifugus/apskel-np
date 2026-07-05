@@ -206,7 +206,12 @@ if (bundle.wire) {
           console.warn("[apskel] write conflicted (revision mismatch):", envelope, body);
           return;
         }
-        if (!r.ok) console.error("[apskel] wire send rejected:", r.status);
+        if (!r.ok) {
+          // e.g. a schema trigger's rejection (published editions are
+          // immutable) arrives as a 400 carrying the database's message.
+          const body = await r.json().catch(() => null);
+          console.error("[apskel] wire send rejected:", r.status, body?.error ?? "");
+        }
       } catch (e) {
         console.error("[apskel] wire send failed:", e);
       }

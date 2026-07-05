@@ -400,7 +400,25 @@ export function attachWire(
         if (!identity) {
           return res.status(401).json({ ok: false, error: "authentication required" });
         }
-        if (stamp) values[stamp] = identity.userId; // ownership at birth
+        if (stamp) {
+          values[stamp] = identity.userId; // ownership at birth
+        } else if (rule === "owner") {
+          // No direct FK to stamp: ownership arrives through the walk,
+          // per RESOLVED (ownership at birth may arrive through the
+          // walk) — the insert must carry the walk's first hop column,
+          // and the REFERENCED parent row must already be the caller's.
+          // A missing or unowned parent denies: the unowned-denies floor
+          // at birth.
+          const hop = (permByTable.get(table)?.hops ?? [])[0];
+          const parentId = hop ? values[hop.column] : undefined;
+          const owner = parentId == null ? null : await ownerOf(hop.parent, parentId);
+          if (owner == null || String(owner) !== String(identity.userId)) {
+            return res.status(403).json({
+              ok: false,
+              error: `insert on ${table} requires owner — the new row must belong to you at birth`,
+            });
+          }
+        }
       }
       const cols = Object.keys(values);
       const sql =
@@ -968,31 +986,14 @@ export async function resolveCollections(db, { collections, permissions = [], in
   const stamps = new Map();
   let userFks = null;
 
-  // The direct-users-FK ownership stamp for one insertable table — shared
-  // by collection-bound tables and create-declared targets, per RESOLVED
-  // (create actions declare insert targets): validation covers them
-  // exactly as collection-bound ones.
-  async function resolveStamp(table) {
-    if (stamps.has(table)) return;
-    if (userFks === null) userFks = await fksReferencing(db, "users").catch(() => []);
-    const candidates = [
-      ...new Set(userFks.filter((f) => f.child_table === table).map((f) => f.col)),
-    ];
-    if (candidates.length > 1) {
-      throw new Error(
-        `table '${table}' has multiple FKs to users (${candidates.join(", ")}) — ` +
-          `the insert ownership stamp is ambiguous`
-      );
-    }
-    const stamp = candidates[0] ?? null;
-    if (!stamp && permBy.get(table)?.write === "owner") {
-      throw new Error(
-        `table '${table}' declares write="owner" but has no direct FK to users — ` +
-          `inserted rows would be born unowned and dead by the unowned-denies floor`
-      );
-    }
-    stamps.set(table, stamp);
-  }
+  // Per-table insertable columns — collection-bound plus create-declared,
+  // per RESOLVED (create actions declare insert targets).
+  const tableCols = new Map();
+  const addCols = (table, cols) => {
+    const s = tableCols.get(table) ?? new Set();
+    for (const c of cols) s.add(c);
+    tableCols.set(table, s);
+  };
 
   for (const c of collections) {
     if (!c.table) continue;
@@ -1005,7 +1006,7 @@ export async function resolveCollections(db, { collections, permissions = [], in
         throw new Error(`column '${c.table}.${col}' (filter/order on ${c.path}) does not exist`);
       }
     }
-    await resolveStamp(c.table);
+    addCols(c.table, c.columns);
   }
   for (const t of insertTargets) {
     for (const col of t.columns) {
@@ -1020,7 +1021,41 @@ export async function resolveCollections(db, { collections, permissions = [], in
         );
       }
     }
-    await resolveStamp(t.table);
+    addCols(t.table, t.columns);
+  }
+
+  // The ownership stamp (the direct users FK the server fills at birth),
+  // and the born-unowned-and-dead floor in its refined form, per RESOLVED
+  // (ownership at birth may arrive through the walk): a write="owner"
+  // insert target is rejected only when its insertable columns could
+  // never establish ownership — no direct users FK to stamp AND the owner
+  // walk's first hop column absent from the allowlist.
+  for (const [table, cols] of tableCols) {
+    if (userFks === null) userFks = await fksReferencing(db, "users").catch(() => []);
+    const candidates = [
+      ...new Set(userFks.filter((f) => f.child_table === table).map((f) => f.col)),
+    ];
+    if (candidates.length > 1) {
+      throw new Error(
+        `table '${table}' has multiple FKs to users (${candidates.join(", ")}) — ` +
+          `the insert ownership stamp is ambiguous`
+      );
+    }
+    const stamp = candidates[0] ?? null;
+    if (!stamp && permBy.get(table)?.write === "owner") {
+      const hop = permBy.get(table)?.hops?.[0];
+      if (!hop || !cols.has(hop.column)) {
+        throw new Error(
+          `table '${table}' declares write="owner" but has no direct FK to users, and ` +
+            (hop
+              ? `its insertable columns (${[...cols].join(", ") || "none"}) do not include ` +
+                `the owner walk's first hop '${hop.column}'`
+              : `no owner walk exists to carry ownership`) +
+            ` — inserted rows would be born unowned and dead by the unowned-denies floor`
+        );
+      }
+    }
+    stamps.set(table, stamp);
   }
   return stamps;
 }
