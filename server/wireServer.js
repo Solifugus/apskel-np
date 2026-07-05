@@ -927,7 +927,14 @@ export async function resolveQueries(db, queries, { appDir, collections = [], qu
       throw new Error(`query '${q.name}' has no SQL body — expected ${file}`);
     }
     const sql = fs.readFileSync(file, "utf8").trim().replace(/;\s*$/, "");
-    if (!/^\s*select\b/i.test(sql) || sql.includes(";")) {
+    // The single-SELECT check reads past `--` line comments (documented
+    // SQL is encouraged); the executed body keeps them.
+    const meat = sql
+      .split("\n")
+      .filter((l) => !l.trim().startsWith("--"))
+      .join("\n")
+      .trim();
+    if (!/^select\b/i.test(meat) || meat.includes(";")) {
       throw new Error(`query '${q.name}' must be a single SELECT statement (${file})`);
     }
     q.sql = sql;

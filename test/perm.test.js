@@ -98,13 +98,20 @@ check(
   const kf = resolveReferences(loadApp(path.join(repoDir, "apps", "knowledge-foyer", "app.xml")));
   const kfPerms = collectPermissions(kf);
   check(
-    "knowledge-foyer declares articles + article_editions public/owner, tags public/none",
-    kfPerms.length === 3 &&
+    // Seven rule-bearing tables since KF v1.0 (Phase 9): the read flip
+    // (editions read=owner), comments/marks author-owned in one hop,
+    // expositions with their nested rules.
+    "knowledge-foyer v1.0: the read flip, author-owned comments/marks, expositions",
+    kfPerms.length === 7 &&
       kfPerms.some((p) => p.table === "articles" && p.read === "public" && p.write === "owner") &&
       kfPerms.some(
-        (p) => p.table === "article_editions" && p.write === "owner" && p.hops.length === 2
+        (p) => p.table === "article_editions" && p.read === "owner" && p.write === "owner" && p.hops.length === 2
       ) &&
-      kfPerms.some((p) => p.table === "tags" && p.read === "public" && p.write === "none"),
+      kfPerms.some((p) => p.table === "tags" && p.read === "public" && p.write === "none") &&
+      kfPerms.some((p) => p.table === "comments" && p.write === "owner" && p.hops.length === 1) &&
+      kfPerms.some((p) => p.table === "comment_marks" && p.write === "owner" && p.hops.length === 1) &&
+      kfPerms.some((p) => p.table === "expositions" && p.write === "owner") &&
+      kfPerms.some((p) => p.table === "exposition_tag_rules" && p.hops.length === 2),
     JSON.stringify(kfPerms)
   );
 }

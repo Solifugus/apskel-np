@@ -1,9 +1,14 @@
-<app title="Knowledge Foyer" version="0.4">
+<app title="Knowledge Foyer" version="1.0">
 
     <client style="style.css">
 
         {view = "landing"}
         {currentEditionId = ""}
+        {currentExpositionId = ""}
+        {comment = ""}
+        {expoTitle = ""}
+        {ruleTag = ""}
+        {ruleKind = "has"}
 
         <who type="layout" orient="horizontal">
             Signed in as: {app.identity.email} — {app.identity.status}
@@ -13,27 +18,96 @@
         <signin type="login" visible="app.view: landing"/>
 
         <landing type="layout" orient="vertical" visible="app.view: landing">
-            Welcome to Knowledge Foyer. Pick a draft:
-            <openOne type="button" action='apskel.nav.go("/edit/1")'>Open draft 1</openOne>
-            <openTwo type="button" action='apskel.nav.go("/edit/2")'>Open draft 2</openTwo>
+            Published articles:
+            <published type="layout" orient="vertical" source="publishedArticles" order=".published_at desc" limit="20">
+                <row type="layout" orient="horizontal">
+                    {.title}
+                    <read type="button" action='apskel.field.set(app.view, "article", app.currentEditionId, .id)'>Read</read>
+                </row>
+            </published>
+            My drafts (empty until you log in):
+            <drafts type="layout" orient="vertical" source="myDrafts">
+                <row type="layout" orient="horizontal">
+                    {.title}
+                    <open type="button" action='apskel.field.set(app.view, "editor", app.currentEditionId, .id)'>Edit</open>
+                </row>
+            </drafts>
+            Expositions:
+            <expoList type="layout" orient="vertical" table="expositions" order=".id asc" limit="20">
+                <row type="layout" orient="horizontal">
+                    {.title}
+                    <openExpo type="button" action='apskel.field.set(app.view, "exposition", app.currentExpositionId, .id)'>View</openExpo>
+                </row>
+            </expoList>
+            <expoBar type="layout" orient="horizontal">
+                <expoTitleInput type="text-input" field="expoTitle" placeholder="new exposition title"/>
+                <newExpo type="button" action='apskel.data.create("expositions", "title", expoTitle)'>New exposition</newExpo>
+            </expoBar>
         </landing>
 
         <workspace type="layout" orient="vertical" visible="app.view: editor">
             <articleEditor type="text-editor" table="article_editions" record="app.currentEditionId" conflict="detect"/>
+            <pubBar type="layout" orient="horizontal" table="article_editions" record="app.currentEditionId" conflict="detect">
+                Status: {.status}
+                <publish type="button" action='apskel.field.set(.status, "published")'>Publish</publish>
+                <nextEdition type="button" action='apskel.data.create("article_editions", "article_id", .article_id, "title", .title, "body", .body)'>Start next edition</nextEdition>
+            </pubBar>
             <tagBox type="layout" orient="vertical" table="articles" record="1">
-                Tags:
+                Tags (article 1 — the fixed-record stopgap):
                 <tagPicker type="multi-select" field=".tags: tags.id->tags.name"/>
             </tagBox>
-            <readIt type="button" action='apskel.field.set(app.view, "article")'>Read it</readIt>
             <toLanding type="button" action='apskel.nav.go("/")'>Back to landing</toLanding>
         </workspace>
 
-        <reader type="layout" orient="vertical" visible="app.view: article" table="article_editions" record="app.currentEditionId" conflict="detect">
+        <reader type="layout" orient="vertical" visible="app.view: article" source="publishedEdition" record="app.currentEditionId">
             Title: {.title}
             {.body}
-            <editIt type="button" action='apskel.field.set(app.view, "editor")'>Edit</editIt>
-            <toLandingTwo type="button" action='apskel.nav.go("/")'>Back to landing</toLandingTwo>
+            Published: {.published_at}
         </reader>
+        <feedback type="layout" orient="vertical" visible="app.view: article" table="comments" filter=".edition_id: app.currentEditionId" order=".id asc" limit="50">
+            <row type="layout" orient="horizontal">
+                {.body}
+                <pro type="button" action='apskel.data.create("comment_marks", "comment_id", .id, "kind", "pro")'>pro</pro>
+                <con type="button" action='apskel.data.create("comment_marks", "comment_id", .id, "kind", "con")'>con</con>
+            </row>
+        </feedback>
+        <tallies type="layout" orient="vertical" visible="app.view: article" source="commentTallies(app.currentEditionId)">
+            <row type="layout" orient="horizontal">
+                comment {.id}: pro {.pro_count} / con {.con_count}
+            </row>
+        </tallies>
+        <commentBar type="layout" orient="horizontal" visible="app.view: article">
+            <commentInput type="text-input" field="comment" placeholder="say something"/>
+            <send type="button" action='apskel.data.create("comments", "edition_id", app.currentEditionId, "body", comment)'>Comment</send>
+        </commentBar>
+        <readerNav type="layout" orient="horizontal" visible="app.view: article">
+            <toLandingFromReader type="button" action='apskel.nav.go("/")'>Back to landing</toLandingFromReader>
+        </readerNav>
+
+        <expositionView type="layout" orient="vertical" visible="app.view: exposition" table="expositions" record="app.currentExpositionId">
+            Exposition: {.title}
+            {.description}
+        </expositionView>
+        <expoArticles type="layout" orient="vertical" visible="app.view: exposition" source="expositionArticles(app.currentExpositionId)">
+            <row type="layout" orient="horizontal">
+                {.title}
+                <read type="button" action='apskel.field.set(app.view, "article", app.currentEditionId, .id)'>Read</read>
+            </row>
+        </expoArticles>
+        <ruleList type="layout" orient="vertical" visible="app.view: exposition" table="exposition_tag_rules" filter=".exposition_id: app.currentExpositionId" order=".id asc">
+            <row type="layout" orient="horizontal">
+                {.rule} tag {.tag_id}
+                <drop type="button" action='apskel.data.remove("exposition_tag_rules", .id)'>remove</drop>
+            </row>
+        </ruleList>
+        <ruleBar type="layout" orient="horizontal" visible="app.view: exposition">
+            <ruleTagInput type="text-input" field="ruleTag" placeholder="tag id (1-4)"/>
+            <ruleKindInput type="text-input" field="ruleKind" placeholder="has or lacks"/>
+            <addRule type="button" action='apskel.data.create("exposition_tag_rules", "exposition_id", app.currentExpositionId, "tag_id", ruleTag, "rule", ruleKind)'>Add rule</addRule>
+        </ruleBar>
+        <expoNav type="layout" orient="horizontal" visible="app.view: exposition">
+            <toLandingFromExpo type="button" action='apskel.nav.go("/")'>Back to landing</toLandingFromExpo>
+        </expoNav>
 
     </client>
 
@@ -49,15 +123,29 @@
             <set field="app.view" value="article"/>
             <set field="app.currentEditionId" param="id"/>
         </route>
+        <route path="/exposition/:id">
+            <set field="app.view" value="exposition"/>
+            <set field="app.currentExpositionId" param="id"/>
+        </route>
     </routes>
 
     <data>
+        <query name="publishedArticles" tables="article_editions" read="public"/>
+        <query name="publishedEdition" tables="article_editions" read="public"/>
+        <query name="myDrafts" params="@user" tables="article_editions, articles" read="users"/>
+        <query name="commentTallies" params="edition" tables="comments, comment_marks" read="public"/>
+        <query name="expositionArticles" params="exposition" tables="article_editions, exposition_tag_rules, article_tags" read="public"/>
         <graph name="knowledge">
             <users>
                 <articles read="public" write="owner">
-                    <article_editions read="public" write="owner"/>
+                    <article_editions read="owner" write="owner"/>
                     <tags read="public" write="none"/>
                 </articles>
+                <comments read="public" write="owner"/>
+                <comment_marks read="public" write="owner"/>
+                <expositions read="public" write="owner">
+                    <exposition_tag_rules read="public" write="owner"/>
+                </expositions>
             </users>
         </graph>
     </data>

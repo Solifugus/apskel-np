@@ -62,8 +62,12 @@ const root = resolveReferences(loadApp(path.join(repoDir, "apps", "knowledge-foy
 const bound = collectBoundFields(root);
 
 // Phase 7.1: knowledge-foyer's contexts became dynamic (record=
-// "app.currentEditionId") and a read-only reader pane joined — the
-// criterion-6 path app.workspace.articleEditor.title is unchanged.
+// "app.currentEditionId"). Phase 9 (KF v1.0): the reader pane went
+// query-sourced (collectQueryBound territory, no longer here), the
+// publish bar joined with its function-arg bound fields (article_id/
+// title/body ride the next-edition create action), and the exposition
+// view is a second dynamic record context — the criterion-6 path
+// app.workspace.articleEditor.title is unchanged.
 const dynamicEntry = (ctx, field) => ({
   storePath: `${ctx}.${field}`,
   path: ctx,
@@ -73,13 +77,26 @@ const dynamicEntry = (ctx, field) => ({
   conflict: "detect",
   recordPath: "app.currentEditionId",
 });
+const expoEntry = (ctx, field) => ({
+  storePath: `${ctx}.${field}`,
+  path: ctx,
+  table: "expositions",
+  record: null,
+  field,
+  conflict: "offline-readonly",
+  recordPath: "app.currentExpositionId",
+});
 check(
-  "bound metadata: editor and reader panes, dynamic record, detect",
+  "bound metadata: editor pane, publish bar, exposition view — dynamic records, detect on editions",
   eq(bound, [
     dynamicEntry("app.workspace.articleEditor", "title"),
     dynamicEntry("app.workspace.articleEditor", "body"),
-    dynamicEntry("app.reader", "title"),
-    dynamicEntry("app.reader", "body"),
+    dynamicEntry("app.workspace.pubBar", "status"),
+    dynamicEntry("app.workspace.pubBar", "article_id"),
+    dynamicEntry("app.workspace.pubBar", "title"),
+    dynamicEntry("app.workspace.pubBar", "body"),
+    expoEntry("app.expositionView", "title"),
+    expoEntry("app.expositionView", "description"),
   ]),
   JSON.stringify(bound)
 );

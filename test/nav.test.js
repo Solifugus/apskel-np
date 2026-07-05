@@ -148,7 +148,8 @@ console.log("\nrouter — URL <-> state, both directions, declaration order");
   const bundle = serializeApp(kf);
   check(
     "knowledge-foyer routes serialize with bound store paths",
-    bundle.routes.length === 3 &&
+    // Four routes since KF v1.0 (Phase 9 added /exposition/:id).
+    bundle.routes.length === 4 &&
       eq(bundle.routes[1], {
         path: "/edit/:id",
         params: ["id"],

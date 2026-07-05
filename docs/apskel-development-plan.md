@@ -414,8 +414,15 @@ profile** — the landing page lists only published articles; `curl`
 naming table and rule; editing a published edition through `poke.js` →
 400 carrying the trigger's message; marking the same comment twice →
 second attempt 400, tally unchanged. **Cross-profile liveness** —
-publish in the owner's tab and watch the logged-out profile's landing
-list gain the article on the broadcast; `psql`: `comment_marks` rows
+publish in the owner's tab: the owner's own drafts/landing lists move
+live (the owner hears the edition broadcast); the logged-out profile
+sees the article after a reload — a recorded consequence, not a bug:
+broadcasts obey read rules, `article_editions` is `read="owner"`, so
+anonymous connections never hear the publish and the `publishedArticles`
+refetch has no trigger. Comments and marks are `read="public"`, so THOSE
+move live in the logged-out profile — post a comment or mark in one
+profile and watch the anonymous reader's list and tallies update on the
+broadcast. `psql`: `comment_marks` rows
 carry the token's user id regardless of what the client claimed, and no
 `sessions` table has appeared. Startup fixtures read as errors in the
 terminal, per the standing discipline.
