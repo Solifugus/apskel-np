@@ -519,3 +519,89 @@ cannot mean anything.
 * `/app.json` initialData: only `read=public` tables ship rows; a
   non-public fixed-record context is absent from initialData and fetches
   through the wire once a token exists.
+
+---
+
+## Phase 7.3 — multi-value fields (design session 3)
+
+### edge-domain/ — must load successfully
+
+`{.tags: tags.id->tags.name}` in an `articles` data context, with `tags` a
+graph child of `articles`. The reference binds to the **edge**, not a
+column, per RESOLVED (a set field is a domain-bearing edge reference):
+
+* The site's binding is edge-kind: parent `articles`, child (edge) `tags`,
+  stored column `id`, label column `name`.
+* Serialize emits a set-field entry: parent table `articles`, edge `tags`,
+  the context's record, and an options descriptor
+  `{table: "tags", value: "id", label: "name"}`.
+* The widget's `options` path is the instance's own store path — checked
+  in the harness, owned by the runtime, filled via `applyServerWrite`.
+* `tags` carries `read="public" write="none"` but **no owner rule**, so
+  its ancestor hops are NOT FK-resolved at startup — a join edge between
+  `tags` and `articles` is not an error here. (Hop columns resolve only
+  for tables whose read or write rule is `owner`; anything else would make
+  every join-edge child a spurious startup failure.)
+
+### fail-edge-no-domain/ — must fail at load
+
+`{.tags}` where `tags` is a graph child of the context table — an edge
+reference REQUIRES a domain (that is where the stored/display contract
+lives); no implicit key, no implicit set-ness.
+
+### fail-edge-bare-form/ — must fail at load
+
+`{.tags: tags.name}` — on an edge the **arrow form is mandatory**: the
+stored value is not the author's choice (it must be the join FK's
+referenced column, checked at startup; the form itself is checked here).
+
+### fail-edge-literal/ — must fail at load
+
+`{.tags: "urgent", tags.id->tags.name}` — a literal cannot be a membership
+row; literal and mixed domains are column-domain features only.
+
+### fail-owner-past-join/ — must fail at load
+
+`<tags write="owner"/>` whose only path to `users` crosses the
+`articles→tags` edge — which the set-field reference in the same app has
+marked as a join edge. The owner walk refuses to cross a join edge; same
+error class as "no graph path to users". (Without a set-field reference
+marking the edge, the same mistake surfaces at startup instead, when
+introspection finds no child→parent FK.)
+
+### Startup checks (fake introspection in the harness — schema-dependent,
+### so no loader fixture is possible)
+
+* Join-edge resolution for a set field: zero join-table candidates →
+  startup error; two candidates → startup error naming both; `join=` on
+  the child graph node picks one; `join=` naming a non-candidate → error.
+* Stored-column contract: the domain's stored column must equal the column
+  the join table's FK references — mismatch is a startup error naming the
+  site and both columns.
+* A join table declared as a graph node → startup error naming it (only
+  the schema identifies join tables).
+* A one-to-many FK edge used as a set field → startup error (membership
+  requires a join edge).
+
+### Wire membership (fake db, real HTTP)
+
+* `apskel.data.setMembers {table, id, edge, members}`: whole-set replace
+  in ONE transaction — DELETE missing + INSERT new (`ON CONFLICT DO
+  NOTHING`) between BEGIN/COMMIT; a failure mid-diff rolls back (no
+  partial set).
+* Members are canonically sorted by stored key: in `membersChanged`, in
+  `getMembers` responses, and in what the client sends — so the store's
+  ordered-element array equality behaves as set equality, and an echo or
+  refetch of an unchanged set does not cascade (fire counters prove it).
+* Permissions ride the PARENT row: `setMembers` checks the parent table's
+  write rule (owner walk on the parent id — a second account gets 403
+  naming the rule; no token 401); `getMembers` checks its read rule;
+  `membersChanged` broadcasts scope by the parent's read rule.
+* `apskel.data.options {table, value, label}` → `(value, label)` pairs
+  ordered by label, governed by the options table's own read rule;
+  columns validated against the load-time options descriptor (arbitrary
+  column pairs are 400).
+* Client: row id captured at interaction time; sends suspended during the
+  selection-change fetch window; empty selection reads `undefined` (not
+  `[]`) with sends suppressed; options fetch failure → empty options +
+  console warning, no retry.

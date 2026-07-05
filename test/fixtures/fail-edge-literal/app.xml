@@ -1,0 +1,21 @@
+<app title="Edge With Literal Domain Item" version="0.1">
+
+    <client>
+
+        <editor type="layout" orient="vertical" table="articles" record="1">
+            Tags: {.tags: "urgent", tags.id->tags.name}
+        </editor>
+
+    </client>
+
+    <data>
+        <graph name="knowledge">
+            <users>
+                <articles read="public" write="owner">
+                    <tags read="public" write="none"/>
+                </articles>
+            </users>
+        </graph>
+    </data>
+
+</app>
