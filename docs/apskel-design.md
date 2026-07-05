@@ -772,12 +772,12 @@ creates the row. The new instance then appears via the same broadcast path as
 any remote insert: your own insert and someone else's insert render through
 one code path.
 
-Collection bindings should admit declarative `order=`, and probably `filter=`
-and `limit=`, attributes (a forum wants newest-first and pagination; better as
-declared attributes than as function-call escape hatches).
-
-DECISION-POINT: fix the exact v0.1 attribute set and syntax for `order=` /
-`filter=` / `limit=` on collection bindings.
+Collection bindings admit declarative `order=`, `filter=`, and `limit=`
+attributes (a forum wants newest-first and pagination; better as declared
+attributes than as function-call escape hatches). The exact v0.1 forms are
+resolved in design session 4 — see RESOLVED (`filter=` is the domain
+syntax on a column) and RESOLVED (`order=` and `limit=` closed forms) in
+Core Semantics.
 
 ---
 
@@ -2047,7 +2047,8 @@ state, not its table. That lands in design session 5 as a property of
 permission boundary, keeping conditions in server-side SQL rather than
 inventing an XML expression syntax. Until then permissions are per-table
 only, and the KF demo's `read="public"` on `article_editions` deliberately
-exposes drafts in the interim slice.
+exposes drafts in the interim slice. → **Closed by design session 4**: see
+RESOLVED (the query is the permission boundary).
 
 RESOLVED (a set field is a domain-bearing edge reference): `{.tags:
 tags.id->tags.name}` — when the data context's table has a declared graph
@@ -2135,14 +2136,86 @@ store gains **ordered-element array equality** for its same-value check;
 combined with the canonical stored-key order above, equal sets never
 cascade. Widget inference: edge-bound domain → multi-select.
 
-DECISION-POINT (collection sources beyond a table and filtering): the landing
-page needs "all *published* articles" (a filtered table, making `filter=`
-load-bearing rather than deferrable), and expositions need rule-based queries
-(has tag / lacks tag) that exceed any inline filter syntax. Sketched default:
-`filter=` handles simple declarative predicates; anything richer is a **named
-server-defined query** declared in `<data>` and usable as a collection source
-(`source="publishedByTag"` with parameters) — keeping complex SQL on the
-server and out of the XML, consistent with the no-arbitrary-expressions rule.
+RESOLVED (`filter=` is the domain syntax on a column):
+`filter=".status: published"` — the third consumer of the `{ref: domain}`
+grammar, after field domains and `visible=`. The left side is a column of
+the binding's own row context; the right side is literals **or absolute
+references** — `filter=".created_by: app.identity.userId"` is "my drafts",
+and a reference value makes the filter *dynamic*: its change re-runs the
+fetch, the same machinery as a `record=` selection change. Set membership,
+String-compared, identical semantics to `visible=`. No bare-truthiness
+form (SQL truthiness is a swamp — explicit domains only), one `filter=`
+per binding (AND-composition deferred), and `filter=` is legal only on
+**table** sources — a query owns its own WHERE. Column existence is a
+startup check, per the error taxonomy.
+
+RESOLVED (`order=` and `limit=` closed forms): `order=".created_at desc"`
+— one column reference plus optional `asc`/`desc` (default `asc`), one
+column in v0.1; `limit="50"` — integer literal only. Both compose onto
+table sources and wrap query sources. Columns are startup-checked. This
+closes the Collection Binding section's open attribute-set question
+verbatim: that is the exact v0.1 set.
+
+RESOLVED (named queries are declared, read-only sources): in `<data>`:
+
+```xml
+<query name="publishedEditions" tables="articles, article_editions" read="public"/>
+<query name="publishedByTag" params="tag" tables="articles, article_editions, tags, article_tags" read="public"/>
+```
+
+The SQL body lives in `queries/<name>.sql` (out of the XML, by the
+standing no-arbitrary-expressions rule): one SELECT statement, `$1..$n`
+positional parameters matching the declared `params` list. Startup
+validates that the file exists, is a single SELECT, and **executes under
+`LIMIT 0`** — proving it runs against the live schema and exposes an
+**`id` column**. Queries must be row-addressable because a query is
+usable anywhere `table=` is: as a collection source or as a record
+context. The deliberate cost, stated: an id-less aggregate query (counts,
+stats) is not a v0.1 source. Mount syntax reuses the call grammar —
+`source="publishedEditions"` bare, `source="publishedByTag(app.currentTag)"`
+parameterized — brace-less, bound at load, arguments are literals or
+references exactly like `action=` arguments, arity load-checked against
+the declared params. Query sources are **read-only by grammar**: an input
+binding (`field=`) or a `conflict=` under a query-sourced context is a
+load error; `apskel.data.get` works — the server wraps the query
+(`SELECT col FROM (<query>) q WHERE q.id = $n`).
+
+RESOLVED (the query is the permission boundary) — closing the
+row-state-conditional DECISION-POINT from design session 2: a query
+declares its own `read=`, closed menu `public` | `users` — there is no
+`owner` query, because a list is not a row. Running the query is governed
+by **that rule alone, regardless of the underlying tables' rules**. That
+asymmetry is the entire point: the SQL body *is* the row condition the
+per-table rules cannot express, and the author's obligation — stated
+here, not hidden — is that the query exposes only what its rule warrants
+(`publishedEditions` selects WHERE published, or it is a leak the author
+wrote). KF endgame, recorded: `article_editions` eventually flips
+private, `/article/:id` becomes a query-sourced record context — that
+flip lands in Phase 9 (KF completion), not in the collection
+implementation phase.
+
+RESOLVED (`apskel.data.select` and collection freshness): one read
+envelope — source (table or query), composed filter/order/limit, params —
+allowlisted from the app's own resolved bindings like every wire type,
+gated by the table's or the query's read rule, returning `id` plus **only
+the columns the template binds**, never `*`. Freshness splits by what is
+knowable: **table-sourced** collections maintain membership client-side
+from ordinary broadcasts — a changed row is re-evaluated against the
+filter locally, which the literal/reference filter semantics make
+possible by construction (String-compare needs no server round-trip);
+**query-sourced** collections re-fetch when a broadcast names a table in
+the query's declared `tables=` list, or when a parameter value changes.
+`tables=` is mandatory on `<query>` — an author-declared dependency
+list, chosen over SQL introspection as less magical; the failure mode is
+stated, not discovered: a wrong list means a stale list until the next
+fetch trigger.
+
+RESOLVED (collection sources: what stays out of v0.1): no AND/OR filter
+composition, no functions in filters or domains (that DECISION-POINT
+stays open), no pagination beyond `limit=`, and **no client-supplied SQL,
+ever**. Expositions need nothing new from the framework: the
+has-tag/lacks-tag rule builder is app UI writing `exposition_tag_rules`
+rows that a named server-defined query consumes.
 
 ---
 

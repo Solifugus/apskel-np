@@ -318,12 +318,47 @@ nothing — value and options both live at store paths.
 
 ## Phase 8 — Collection Binding Implementation
 
-Repetition-as-binding per the design doc: template resolved at load, per-row
+Implements the Collection Binding RESOLVED entries plus design session 4
+(item 5 of the five gaps — the four `filter=`/`order=`/`limit=`/query
+entries and RESOLVED (apskel.data.select and collection freshness)).
+
+**First deliverable block — query/source infrastructure, before any
+repetition:**
+
+* `<query>` declarations parsed and validated at load (closed read menu
+  `public`/`users`, mandatory `tables=`, params list); SQL bodies in
+  `queries/<name>.sql`; startup validation: file exists, single SELECT,
+  LIMIT-0 execution proving it runs and exposes an `id` column.
+* `source=` mounts via the call grammar (bare or parameterized, arity
+  load-checked); query-sourced contexts read-only by grammar (`field=` or
+  `conflict=` under one is a load error); `apskel.data.get` through the
+  query wrap.
+* `filter=` (domain syntax on a column, literals + absolute references,
+  table sources only), `order=`, `limit=`; column existence at startup.
+* `apskel.data.select` gated by table/query read rules, returning id +
+  bound columns only.
+
+**Second block — repetition itself:** template resolved at load, per-row
 instantiation at runtime, PK-keyed instance paths, per-row scratch state,
-INSERT/DELETE broadcasts creating/destroying instances, `order=` (and
-`filter=` once Phase 7 fixes its syntax). Verification: a live list in two
-tabs — insert in one, watch the instance appear in the other; delete likewise;
-confirm addressing an instance by PK path survives a reorder.
+INSERT/DELETE broadcasts creating/destroying instances (the resolver
+re-run locally over inserted subtrees); table-sourced membership
+maintained client-side against the filter; query-sourced collections
+re-fetching on `tables=` broadcasts and param changes; dynamic filter
+references re-running the fetch like a selection change.
+
+Do NOT build yet: row INSERT/DELETE *origination* beyond what the list
+demo needs (a minimal new-row composer is in scope; full create/publish
+workflow is Phase 9), AND/OR filters, pagination, functions in domains,
+the KF read-rule flip (Phase 9), the offline queue.
+
+Verification (personally): a live list in two tabs — insert in one, watch
+the instance appear in the other; delete likewise; confirm addressing an
+instance by PK path survives a reorder; a filtered list gains/loses a row
+in both tabs when a broadcast flips the filtered column; a query-sourced
+list refreshes when a `tables=` table changes; curl `apskel.data.select`
+anonymously against a `read="users"` query → 401, against the public one
+→ rows with only bound columns; the startup fixtures (missing file,
+non-SELECT, id-less query) fail in the terminal naming the query.
 
 ## Phase 9 — Knowledge Foyer Completion
 
