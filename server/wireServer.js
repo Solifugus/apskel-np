@@ -50,6 +50,7 @@ export function attachWire(
     queries = [],
     queryBound = [],
     insertStamps = new Map(),
+    insertTargets = [],
   }
 ) {
   const allowlist = new Map(bound.map((b) => [`${b.table}.${b.field}`, b]));
@@ -58,13 +59,23 @@ export function attachWire(
   const queriesByName = new Map(queries.map((q) => [q.name, q]));
   const queryBoundByKey = new Map(queryBound.map((b) => [`${b.query}.${b.field}`, b]));
   // Insertable tables and their column allowlists come from the app's own
-  // table-sourced collections, per RESOLVED (row creation and deletion).
+  // table-sourced collections plus the tables its create actions name, per
+  // RESOLVED (row creation and deletion) and RESOLVED (create actions
+  // declare insert targets). Deletion stays collection-scoped: create
+  // actions declare INSERT targets, nothing wider.
   const insertColumns = new Map();
+  const deletableTables = new Set();
   for (const c of collections) {
     if (!c.table) continue;
+    deletableTables.add(c.table);
     const cols = insertColumns.get(c.table) ?? new Set();
     for (const col of c.columns) cols.add(col);
     insertColumns.set(c.table, cols);
+  }
+  for (const t of insertTargets) {
+    const cols = insertColumns.get(t.table) ?? new Set();
+    for (const col of t.columns) cols.add(col);
+    insertColumns.set(t.table, cols);
   }
   // Set fields by parent:edge, per RESOLVED (membership writes are
   // whole-set replaces); their options descriptors form the options
@@ -80,6 +91,33 @@ export function attachWire(
   function rulesFor(table) {
     if (IDENTITY_TABLES.has(table)) return IDENTITY_RULES;
     return permByTable.get(table) ?? DEFAULT_RULES;
+  }
+
+  // Assemble a query's full positional parameter array, per RESOLVED
+  // (identity-bound query parameters): the wire supplies values for the
+  // non-@ params in declared order; '@user' slots fill from the verified
+  // token — never from the wire. A query declaring '@user' requires
+  // identity regardless of its read rule. Returns the array, or null
+  // after answering.
+  function queryParams(q, given, req, res) {
+    const callCount = q.params.filter((p) => !p.startsWith("@")).length;
+    if (given.length !== callCount) {
+      res
+        .status(400)
+        .json({ ok: false, error: `query '${q.name}' takes ${callCount} call-site parameter(s)` });
+      return null;
+    }
+    let userId = null;
+    if (q.params.includes("@user")) {
+      const identity = auth ? auth.identity(req) : null;
+      if (!identity) {
+        res.status(401).json({ ok: false, error: "authentication required" });
+        return null;
+      }
+      userId = identity.userId;
+    }
+    let next = 0;
+    return q.params.map((p) => (p === "@user" ? userId : given[next++]));
   }
 
   // The graph walk, per RESOLVED (owner is a graph walk): one parameterized
@@ -121,11 +159,20 @@ export function attachWire(
             .status(400)
             .json({ ok: false, error: `baseRevision required (conflict=detect on ${table})` });
         }
-        const result = await db.query(
-          `UPDATE ${quoteIdent(table)} SET ${quoteIdent(field)} = $1, ` +
-            `revision = revision + 1 WHERE id = $2 AND revision = $3 RETURNING revision`,
-          [value, id, envelope.baseRevision]
-        );
+        let result;
+        try {
+          result = await db.query(
+            `UPDATE ${quoteIdent(table)} SET ${quoteIdent(field)} = $1, ` +
+              `revision = revision + 1 WHERE id = $2 AND revision = $3 RETURNING revision`,
+            [value, id, envelope.baseRevision]
+          );
+        } catch (e) {
+          // A database rejection (an app trigger, a constraint) is a
+          // coherent 400 carrying the database's message — never a 500,
+          // exactly as insert already answers. Per RESOLVED (published
+          // editions are immutable at the schema).
+          return res.status(400).json({ ok: false, error: `write rejected: ${e.message}` });
+        }
         if (result.rowCount === 0) {
           const current = await db.query(
             `SELECT revision FROM ${quoteIdent(table)} WHERE id = $1`,
@@ -153,10 +200,15 @@ export function attachWire(
         return res.json({ ok: true, revision: result.rows[0].revision });
       }
 
-      const result = await db.query(
-        `UPDATE ${quoteIdent(table)} SET ${quoteIdent(field)} = $1 WHERE id = $2`,
-        [value, id]
-      );
+      let result;
+      try {
+        result = await db.query(
+          `UPDATE ${quoteIdent(table)} SET ${quoteIdent(field)} = $1 WHERE id = $2`,
+          [value, id]
+        );
+      } catch (e) {
+        return res.status(400).json({ ok: false, error: `write rejected: ${e.message}` });
+      }
       if (result.rowCount === 0) {
         return res.status(404).json({ ok: false, error: `no ${table} row with id ${id}` });
       }
@@ -288,12 +340,9 @@ export function attachWire(
       if (c.query) {
         const q = queriesByName.get(c.query.name);
         const given = Array.isArray(envelope.params) ? envelope.params : [];
-        if (given.length !== q.params.length) {
-          return res
-            .status(400)
-            .json({ ok: false, error: `query '${q.name}' takes ${q.params.length} parameter(s)` });
-        }
-        params.push(...given);
+        const full = queryParams(q, given, req, res);
+        if (!full) return;
+        params.push(...full);
         sql = `SELECT ${cols.map(quoteIdent).join(", ")} FROM (${q.sql}) q`;
       } else {
         sql = `SELECT ${cols.map(quoteIdent).join(", ")} FROM ${quoteIdent(c.table)}`;
@@ -325,7 +374,7 @@ export function attachWire(
       if (!allowed) {
         return res
           .status(400)
-          .json({ ok: false, error: `no collection-bound table '${table}' in this app` });
+          .json({ ok: false, error: `table '${table}' is not an insert target in this app` });
       }
       const values = envelope.values && typeof envelope.values === "object" ? envelope.values : {};
       const stamp = insertStamps.get(table) ?? null;
@@ -382,7 +431,7 @@ export function attachWire(
     // field write.
     "apskel.data.delete": async (envelope, req, res) => {
       const { table, id, sourceClient } = envelope;
-      if (!insertColumns.has(table)) {
+      if (!deletableTables.has(table)) {
         return res
           .status(400)
           .json({ ok: false, error: `no collection-bound table '${table}' in this app` });
@@ -410,7 +459,12 @@ export function attachWire(
           g.ownerUserId = owner;
         }
       }
-      const result = await db.query(`DELETE FROM ${quoteIdent(table)} WHERE id = $1`, [id]);
+      let result;
+      try {
+        result = await db.query(`DELETE FROM ${quoteIdent(table)} WHERE id = $1`, [id]);
+      } catch (e) {
+        return res.status(400).json({ ok: false, error: `delete rejected: ${e.message}` });
+      }
       if (result.rowCount === 0) {
         return res.status(404).json({ ok: false, error: `no ${table} row with id ${id}` });
       }
@@ -444,15 +498,12 @@ export function attachWire(
           return res.status(400).json({ ok: false, error: "missing id" });
         }
         const given = Array.isArray(envelope.params) ? envelope.params : [];
-        if (given.length !== q.params.length) {
-          return res
-            .status(400)
-            .json({ ok: false, error: `query '${q.name}' takes ${q.params.length} parameter(s)` });
-        }
+        const full = queryParams(q, given, req, res);
+        if (!full) return;
         const result = await db.query(
           `SELECT ${quoteIdent(envelope.field)} AS value FROM (${q.sql}) q ` +
-            `WHERE q.id = $${given.length + 1}`,
-          [...given, envelope.id]
+            `WHERE q.id = $${full.length + 1}`,
+          [...full, envelope.id]
         );
         if (result.rows.length === 0) {
           return res
@@ -912,10 +963,37 @@ export async function resolveQueries(db, queries, { appDir, collections = [], qu
 // the direct FK to users the server fills at birth, per RESOLVED (row
 // creation and deletion). A write="owner" table with no such FK rejects
 // inserts here: the row would be born unowned and dead.
-export async function resolveCollections(db, { collections, permissions = [] }) {
+export async function resolveCollections(db, { collections, permissions = [], insertTargets = [] }) {
   const permBy = new Map(permissions.map((p) => [p.table, p]));
   const stamps = new Map();
   let userFks = null;
+
+  // The direct-users-FK ownership stamp for one insertable table — shared
+  // by collection-bound tables and create-declared targets, per RESOLVED
+  // (create actions declare insert targets): validation covers them
+  // exactly as collection-bound ones.
+  async function resolveStamp(table) {
+    if (stamps.has(table)) return;
+    if (userFks === null) userFks = await fksReferencing(db, "users").catch(() => []);
+    const candidates = [
+      ...new Set(userFks.filter((f) => f.child_table === table).map((f) => f.col)),
+    ];
+    if (candidates.length > 1) {
+      throw new Error(
+        `table '${table}' has multiple FKs to users (${candidates.join(", ")}) — ` +
+          `the insert ownership stamp is ambiguous`
+      );
+    }
+    const stamp = candidates[0] ?? null;
+    if (!stamp && permBy.get(table)?.write === "owner") {
+      throw new Error(
+        `table '${table}' declares write="owner" but has no direct FK to users — ` +
+          `inserted rows would be born unowned and dead by the unowned-denies floor`
+      );
+    }
+    stamps.set(table, stamp);
+  }
+
   for (const c of collections) {
     if (!c.table) continue;
     for (const col of [c.filter?.column, c.order?.column].filter(Boolean)) {
@@ -927,26 +1005,22 @@ export async function resolveCollections(db, { collections, permissions = [] }) 
         throw new Error(`column '${c.table}.${col}' (filter/order on ${c.path}) does not exist`);
       }
     }
-    if (!stamps.has(c.table)) {
-      if (userFks === null) userFks = await fksReferencing(db, "users").catch(() => []);
-      const candidates = [
-        ...new Set(userFks.filter((f) => f.child_table === c.table).map((f) => f.col)),
-      ];
-      if (candidates.length > 1) {
+    await resolveStamp(c.table);
+  }
+  for (const t of insertTargets) {
+    for (const col of t.columns) {
+      const r = await db.query(
+        `SELECT 1 FROM information_schema.columns WHERE table_name = $1 AND column_name = $2`,
+        [t.table, col]
+      );
+      if (r.rows.length === 0) {
         throw new Error(
-          `table '${c.table}' has multiple FKs to users (${candidates.join(", ")}) — ` +
-            `the insert ownership stamp is ambiguous`
+          `column '${t.table}.${col}' named by the create action at ` +
+            `${t.site.file}:${t.site.line} does not exist`
         );
       }
-      const stamp = candidates[0] ?? null;
-      if (!stamp && permBy.get(c.table)?.write === "owner") {
-        throw new Error(
-          `table '${c.table}' declares write="owner" but has no direct FK to users — ` +
-            `inserted rows would be born unowned and dead by the unowned-denies floor`
-        );
-      }
-      stamps.set(c.table, stamp);
     }
+    await resolveStamp(t.table);
   }
   return stamps;
 }

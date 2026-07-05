@@ -302,6 +302,32 @@ export function collectCollections(root) {
   return collections;
 }
 
+// Insert targets declared by create actions, per RESOLVED (create actions
+// declare insert targets): a load-resolved apskel.data.create IS a binding
+// — its literal table and columns join the insert allowlist. Nothing
+// becomes insertable that the app's own XML does not name. The site rides
+// along so startup validation can name it.
+export function collectInsertTargets(root) {
+  const byTable = new Map();
+  for (const site of root.allRefs) {
+    const b = site.binding;
+    if (!b || b.kind !== "function" || b.name !== "apskel.data.create") continue;
+    const table = JSON.parse(b.args[0].value);
+    const entry = byTable.get(table) ?? {
+      table,
+      columns: new Set(),
+      site: { file: site.file, line: site.line },
+    };
+    for (let i = 1; i < b.args.length; i += 2) entry.columns.add(JSON.parse(b.args[i].value));
+    byTable.set(table, entry);
+  }
+  return [...byTable.values()].map((t) => ({
+    table: t.table,
+    columns: [...t.columns].sort(),
+    site: t.site,
+  }));
+}
+
 export function findByPath(root, targetPath) {
   if (targetPath === "app") return root;
   let cur = root;

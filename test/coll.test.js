@@ -171,7 +171,7 @@ expectLoadFailure("fail-query-unknown", "unknown query named with candidates", [
   "publishedEditions",
 ]);
 expectLoadFailure("fail-query-arity", "call arity checked against declared params", [
-  "takes 0 parameter(s)",
+  "takes 0 call-site parameter(s)",
   "got 2",
 ]);
 expectLoadFailure("fail-query-read-owner", "no owner queries", [

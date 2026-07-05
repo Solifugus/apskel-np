@@ -27,6 +27,7 @@ import {
   collectQueries,
   collectCollections,
   collectQueryBound,
+  collectInsertTargets,
 } from "../runtime/serialize.js";
 import { createAppServer, attachShellFallback } from "../server/appServer.js";
 import {
@@ -61,6 +62,7 @@ let setFields;
 let collections;
 let queryBound;
 let serverQueries;
+let insertTargets;
 try {
   root = resolveReferences(loadApp(path.join(appDir, "app.xml")));
   bound = collectBoundFields(root);
@@ -69,6 +71,7 @@ try {
   setFields = collectSetFields(root);
   collections = collectCollections(root);
   queryBound = collectQueryBound(root);
+  insertTargets = collectInsertTargets(root);
   // Two copies on purpose: startup resolution adds .sql to the server's
   // copy, and SQL bodies never ride the bundle to the browser.
   serverQueries = collectQueries(root);
@@ -148,7 +151,7 @@ try {
   await resolvePermissionColumns(db, permissions);
   await resolveSetFieldEdges(db, setFields, root.data.nodes);
   await resolveQueries(db, serverQueries, { appDir, collections, queryBound });
-  insertStamps = await resolveCollections(db, { collections, permissions });
+  insertStamps = await resolveCollections(db, { collections, permissions, insertTargets });
 } catch (e) {
   console.error(`STARTUP ERROR: ${e.message}`);
   process.exit(1);
@@ -195,6 +198,7 @@ attachWire(app, {
   queries: serverQueries,
   queryBound,
   insertStamps,
+  insertTargets,
 });
 attachShellFallback(app); // deep links: /edit/2 serves the shell — last, so /wire and /events win
 

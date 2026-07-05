@@ -107,6 +107,25 @@ export function resolveReferences(root) {
     for (const child of node.children ?? []) walkNested(child, next);
   })(root, null);
 
+  // '@user' needs an identity to be filled from, per RESOLVED
+  // (identity-bound query parameters). Whether the app uses identity is
+  // XML-knowable (it calls apskel.auth.* or it doesn't), so this is a
+  // load error, not a startup one.
+  const queries = [...(root.data?.queries?.values() ?? [])];
+  if (queries.some((q) => q.params.includes("@user"))) {
+    const usesAuth = root.allRefs.some(
+      (s) => s.binding?.kind === "function" && s.binding.name.startsWith("apskel.auth.")
+    );
+    if (!usesAuth) {
+      const q = queries.find((p) => p.params.includes("@user"));
+      throw new ApskelLoadError(
+        `<query name="${q.name}"> declares '@user' but this app never calls ` +
+          `apskel.auth.* — there is no identity to fill it from`,
+        { file: q.file, line: q.line }
+      );
+    }
+  }
+
   return root;
 }
 
@@ -269,11 +288,18 @@ function resolveSource(site, inner, root) {
     resolveSite(sub, root);
     return { kind: "ref", form: sub.form, binding: sub.binding };
   });
-  if (args.length !== query.params.length) {
+  // The call-site arity counts only the non-@ params: '@user' is filled
+  // server-side from the token, per RESOLVED (identity-bound query
+  // parameters) — a caller neither passes it nor can.
+  const callParams = query.params.filter((p) => !p.startsWith("@"));
+  if (args.length !== callParams.length) {
+    const reserved = query.params.length !== callParams.length
+      ? ` ('@user' is filled server-side from the token, never by the caller)`
+      : "";
     fail(
       site,
-      `query '${name}' takes ${query.params.length} parameter(s) (${query.params.join(", ") || "none"}) ` +
-        `— got ${args.length}`
+      `query '${name}' takes ${callParams.length} call-site parameter(s) ` +
+        `(${callParams.join(", ") || "none"})${reserved} — got ${args.length}`
     );
   }
   return { kind: "source", name, query, args };
@@ -517,23 +543,35 @@ function resolveFunction(site, expr, root) {
         `${[...FRAMEWORK_FUNCTION_NAMES].join(", ")} (app-defined <functions> are a later phase)`
     );
   }
-  const args = splitArgs(argText).map((arg) => {
+  const args = splitArgs(argText).map((arg, idx) => {
     if (LITERAL.test(arg)) return { kind: "literal", value: arg };
     // A reference argument resolves with the same rules, at the same site.
     // (requireFunction applies to the call itself, not its arguments.)
     const sub = { ...site, raw: `{${arg}}`, form: null, binding: null, requireFunction: false };
-    // The assignment target of apskel.field.set is a write, not a read.
-    sub.forbidIdentity = name === "apskel.field.set";
+    // The assignment targets of apskel.field.set (the odd-position pair
+    // slots) are writes, not reads.
+    sub.forbidIdentity = name === "apskel.field.set" && idx % 2 === 0;
     resolveSite(sub, root);
     return { kind: "ref", form: sub.form, binding: sub.binding };
   });
   if (name === "apskel.field.set") {
-    if (args.length !== 2 || args[0].kind !== "ref") {
+    // (target, value) pairs, per RESOLVED (apskel.field.set takes pairs):
+    // even arity, every odd-position argument a write-target reference.
+    if (args.length < 2 || args.length % 2 !== 0) {
       fail(
         site,
-        `apskel.field.set takes (targetReference, value) — the first argument ` +
-          `is a write target, not a literal`
+        `apskel.field.set takes (targetReference, value) pairs — got ` +
+          `${args.length} argument(s)`
       );
+    }
+    for (let i = 0; i < args.length; i += 2) {
+      if (args[i].kind !== "ref") {
+        fail(
+          site,
+          `apskel.field.set argument ${i + 1} must be a write target reference, ` +
+            `not a literal`
+        );
+      }
     }
   }
   if (name === "apskel.nav.go" && args.length !== 1) {

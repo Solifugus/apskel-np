@@ -155,11 +155,20 @@ export function mountApp(root, { store, engine, document, primitives, rootEl, fu
       return;
     }
     if (slot === "action" && node.action) {
-      // field.set is a runtime primitive, not a network call: its first
-      // argument is a write target — assigned, never evaluated.
+      // field.set is a runtime primitive, not a network call: the odd-
+      // position arguments are write targets — assigned, never evaluated.
+      // All pairs apply inside one cascade, per RESOLVED (apskel.field.set
+      // takes pairs), so the URL reverse-match never sees a half-assigned
+      // selection.
       if (node.action.name === "apskel.field.set") {
-        const [target, source] = node.action.args;
-        store.set(target.storePath, evaluateArgs([source], store)[0], "user");
+        const apply = () => {
+          const a = node.action.args;
+          for (let i = 0; i + 1 < a.length; i += 2) {
+            store.set(a[i].storePath, evaluateArgs([a[i + 1]], store)[0], "user");
+          }
+        };
+        if (engine?.batch) engine.batch(apply);
+        else apply();
         return;
       }
       const fn = functions[node.action.name];

@@ -328,6 +328,19 @@ function buildData(dataEl) {
       ? []
       : params.split(",").map((p) => p.trim());
     for (const p of paramList) {
+      // '@user' is the one reserved parameter, per RESOLVED (identity-bound
+      // query parameters): filled server-side from the verified token,
+      // never from the wire. No other @ names exist.
+      if (p.startsWith("@")) {
+        if (p !== "@user") {
+          throw new ApskelLoadError(
+            `params= entry '${p}' on <query name="${name}"> — '@user' is the only ` +
+              `reserved parameter; there is no '${p}'`,
+            at
+          );
+        }
+        continue;
+      }
       if (!SQL_IDENT.test(p)) {
         throw new ApskelLoadError(`params= entry '${p}' on <query name="${name}"> is not a valid name`, at);
       }

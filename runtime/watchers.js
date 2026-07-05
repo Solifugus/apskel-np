@@ -95,6 +95,34 @@ export class WatcherEngine {
     return this.#fireCounts.get(name) ?? 0;
   }
 
+  // Several external writes as ONE cascade, per RESOLVED (apskel.field.set
+  // takes pairs): the cascade shell opens first, run()'s store.sets all
+  // schedule into it (the same mid-cascade path a watcher body's writes
+  // take), then a single drain settles everything — so a watcher on two of
+  // the written fields fires once with both values current, and the
+  // state->URL sync never sees a half-assigned selection.
+  batch(run) {
+    if (this.#cascade) {
+      run(); // already inside a cascade: the writes join it naturally
+      return;
+    }
+    const cascade = {
+      pending: [],
+      pendingByWatcher: new Map(),
+      firingCounts: new Map(),
+      trace: [],
+      effects: new Map(),
+    };
+    this.#cascade = cascade;
+    try {
+      run();
+      this.#drain();
+    } finally {
+      this.#cascade = null;
+    }
+    for (const [path, value] of cascade.effects) this.#deliver(path, value);
+  }
+
   // During a cascade: coalesced per field (last value wins), delivered after
   // settle. Outside any cascade there is nothing to wait for — delivered
   // immediately.
