@@ -268,6 +268,52 @@ again — second account still 403; `curl` a data.get on `users` with your
 own id and token → your row, another id → 403, any data.set on `users` →
 403.
 
+## Phase 7.3 — Multi-Value Fields (implementation)
+
+Implements design session 3 (item 4 of the five gaps). Deliverables:
+
+* Edge-bound set fields: `{.tags: tags.id->tags.name}` binds to the graph
+  edge when the context table has a graph child of that name; arrow form
+  mandatory on an edge (stored column validated against the join FK's
+  referenced column at startup); bare form, missing domain, and
+  literal/mixed domains on an edge are load errors naming the site.
+* Two edge kinds in the graph: FK edges (7.2, ownership-walkable) and join
+  edges (join table introspected at startup; `join=` disambiguates;
+  declaring a join table as a graph node is an error; the owner walk
+  refuses to cross a join edge — load-time when a set field marks the
+  edge, startup otherwise; one-to-many edges cannot be set fields).
+* Wire: `apskel.data.setMembers` (whole-set replace, one transaction,
+  canonical stored-key order, lww-at-set-level), `apskel.data.getMembers`,
+  `apskel.data.membersChanged` broadcast scoped by the parent's read rule;
+  parent-row permissions govern, options list governed by the options
+  table's read rule; row id captured at interaction time; sends suspended
+  during the selection-change fetch window; empty selection reads
+  undefined with sends suppressed.
+* `apskel.data.options` -> (value, label) pairs ordered by label,
+  delivered to the widget instance's own `options` path via
+  applyServerWrite; fetch failure = empty options + console warning, no
+  retry.
+* `multi-select` primitive (two fields: value, options; structural CSS
+  only); ordered-element array equality in the store.
+* Demo: knowledge-foyer v0.4 — `tags` seeded (`read="public"
+  write="none"`), `article_tags` join table, tag picker on a fixed
+  `table="articles" record="1"` context (a derived "this edition's
+  article" selection is collection-sources territory).
+
+Do NOT build yet: tag creation from the widget (needs INSERT — Phase 8),
+option filtering, edge attribute columns, ordering within a set, set-level
+conflict detection, collections.
+
+Verification (personally): two tabs on the same article — toggle a tag in
+A, B's chips update within one broadcast, and A's
+`__apskel.fireCounts()` shows no echo cascade; a forced refetch of an
+unchanged set fires no display watchers (canonical order proven); curl
+`setMembers` as a second account → 403 naming articles' rule, no token →
+401, `getMembers` likewise; psql confirms a mid-flight failure leaves no
+partial set (single transaction); curl `apskel.data.options` returns
+(value, label) ordered by label; devtools confirms the primitive holds
+nothing — value and options both live at store paths.
+
 ## Phase 8 — Collection Binding Implementation
 
 Repetition-as-binding per the design doc: template resolved at load, per-row

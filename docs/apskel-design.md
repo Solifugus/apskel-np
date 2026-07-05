@@ -2034,13 +2034,86 @@ inventing an XML expression syntax. Until then permissions are per-table
 only, and the KF demo's `read="public"` on `article_editions` deliberately
 exposes drafts in the interim slice.
 
-DECISION-POINT (multi-value fields / many-to-many): an article's tag *set* is
-a join-table relationship, but the field/domain system is single-value. The
-sketch `{.tags: tags.name}` implies a multi-select whose writes are inserts
-and deletes on `article_tags`. Sketched default: a domain-bearing field whose
-bound target is a declared graph edge (rather than a column) is multi-valued;
-the widget is a multi-select/chips input; the runtime translates set
-membership changes into join-table inserts/deletes over the Wire.
+RESOLVED (a set field is a domain-bearing edge reference): `{.tags:
+tags.id->tags.name}` — when the data context's table has a declared graph
+child named `tags`, the reference binds to that **edge**, and the field is
+multi-valued: its store value is an **array of stored keys**. The domain is
+mandatory on an edge reference, and on an edge the **arrow form is
+mandatory**: the stored value is not the author's choice — it must be the
+column the join table's FK references, validated at startup (the earliest
+the schema is known) with a mismatch error naming the site and both
+columns. The bare form (`{.tags: tags.name}`) on an edge is a load-time
+error — no implicit key, consistent with no implicit set-ness — and
+literal items or mixed domains on an edge reference are likewise load
+errors: a literal cannot be a membership row. A bare `{.tags}` with no
+domain at all is a load-time error naming the site. Nothing else changes:
+a name that matches a column stays a column; there is no implicit set-ness
+anywhere. Empty context: a set field reads `undefined` (not `[]`) when the
+selection is null, sends suppressed — the same contract as every other
+field.
+
+RESOLVED (the graph has two edge kinds; join tables are machinery): an
+edge is either an **FK edge** (introspected child→parent FK — ownership-
+walkable, 7.2 semantics unchanged) or a **join edge** (a join table with
+exactly one FK to each endpoint, introspected at startup; `join="table"`
+on the child graph node disambiguates multiple candidates, alongside
+`via=`; zero candidates is a startup error). Join tables are introspected
+machinery, never graph nodes — declaring one as a node is an error naming
+it, raised by startup introspection since only the schema identifies a
+join table. The owner walk refuses to cross a join edge: an owner rule on
+a table whose only path to `users` crosses one is an error in the same
+class as "no graph path to users" — caught at load when a set-field
+reference has already marked the edge as a join edge, at startup
+otherwise. Join edges confer no ownership. v0.x set fields require a join
+edge; a one-to-many FK edge used as a set field is an error (assigning
+children is a different, undesigned thing).
+
+RESOLVED (membership writes are whole-set replaces): `apskel.data.setMembers
+{table, id, edge, members}` carries the **desired set** — exactly what the
+deferred-effect seam coalesces naturally (last value wins). The server
+diffs current vs. desired **in one transaction** (DELETE the missing,
+INSERT the new, `ON CONFLICT DO NOTHING`) and broadcasts
+`apskel.data.membersChanged` with the resulting set. Canonical order:
+the server sorts members by stored key in `membersChanged` and in
+`getMembers`, and the client sends sorted — so the store's ordered-element
+array equality behaves as set equality with exactly one equality rule, and
+an echo or refetch of an unchanged set provably does not cascade. Set
+fields are **lww at the set level**; `conflict=detect` does not cover
+edges — recorded deferral to the offline-queue era, the same file as the
+keep-mine/take-theirs prompt, and the raciness is stated plainly: two
+owners editing concurrently means the last set wins and can drop the
+other's simultaneous add. `apskel.data.getMembers` is the read
+counterpart. `setMembers` inherits the 7.1 capture rule: the parent row id
+is captured at interaction time, not send time, and membership sends are
+suspended in the selection-change fetch window exactly like field sends.
+
+RESOLVED (options are runtime state at the widget's own path): the
+domain's table item creates a load-time allowlist entry;
+`apskel.data.options {table, value, label}` returns `(value, label)` pairs
+ordered by label. The runtime delivers them to the widget instance's own
+`options` store path via `applyServerWrite` — ordinary state, no new
+region, primitives stay stateless. Fetched at mount and on selection
+change; an error or 403 on the options fetch leaves the widget with empty
+options and logs a console warning without retry — the autosave-403
+pattern. *Liveness* of the option list (a new tag appearing) arrives with
+collection broadcasts in Phase 8, not here.
+
+RESOLVED (membership permissions ride the parent row): reading or writing
+a set is reading or writing the **parent row**: the parent table's
+read/write rules govern, including the owner walk on the parent's id;
+`membersChanged` broadcasts scope by the parent's read rule. Rules on a
+join table are impossible by grammar — it cannot be a graph node. The
+options list is governed solely by the options table's own read rule,
+declared on its graph node (for the KF interim: `<tags read="public"
+write="none"/>` — tag creation is Phase 8).
+
+RESOLVED (multi-select primitive; array equality in the store): one new
+primitive, `multi-select` (checkbox/chips list, structural CSS only), with
+two fields: `value` (the array) and `options` — the existing `write(ctx,
+field, value)` contract already accommodates multi-field primitives. The
+store gains **ordered-element array equality** for its same-value check;
+combined with the canonical stored-key order above, equal sets never
+cascade. Widget inference: edge-bound domain → multi-select.
 
 DECISION-POINT (collection sources beyond a table and filtering): the landing
 page needs "all *published* articles" (a filtered table, making `filter=`
@@ -2318,7 +2391,7 @@ Knowledge Foyer tests the early framework features:
                 Title: {.title}
                 Body: {.body}
                 Status: {.status: "draft", "published"}
-                Tags: {.tags: tags.name}
+                Tags: {.tags: tags.id->tags.name}
             </articleEditor>
 
             <feedbackPanel type="layout" table="comments" orient="vertical">
@@ -2345,9 +2418,7 @@ Knowledge Foyer tests the early framework features:
                             <comment_marks/>
                         </comments>
                     </article_editions>
-                    <article_tags>
-                        <tags/>
-                    </article_tags>
+                    <tags/>
                 </articles>
                 <expositions>
                     <exposition_tag_rules/>
