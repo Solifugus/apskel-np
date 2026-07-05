@@ -1,0 +1,14 @@
+<app title="field.set Later Pair Has Literal Target" version="0.1">
+
+    <client>
+
+        {view = "landing"}
+        {editionId = ""}
+
+        <panel type="layout" orient="vertical">
+            <go type="button" action='apskel.field.set(app.view, "editor", "app.editionId", 5)'>Broken</go>
+        </panel>
+
+    </client>
+
+</app>

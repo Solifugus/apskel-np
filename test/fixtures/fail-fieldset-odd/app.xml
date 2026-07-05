@@ -1,0 +1,14 @@
+<app title="field.set Odd Arity" version="0.1">
+
+    <client>
+
+        {view = "landing"}
+        {editionId = ""}
+
+        <panel type="layout" orient="vertical">
+            <go type="button" action='apskel.field.set(app.view, "editor", app.editionId)'>Broken</go>
+        </panel>
+
+    </client>
+
+</app>

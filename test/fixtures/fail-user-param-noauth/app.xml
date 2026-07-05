@@ -1,0 +1,18 @@
+<app title="@user In A Tokenless App" version="0.1">
+
+    <client>
+
+        <drafts type="layout" orient="vertical" source="myDrafts">
+            {.title}
+        </drafts>
+
+    </client>
+
+    <data>
+        <query name="myDrafts" params="@user" tables="drafts" read="users"/>
+        <graph name="g">
+            <drafts/>
+        </graph>
+    </data>
+
+</app>

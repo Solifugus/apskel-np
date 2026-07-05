@@ -1,0 +1,32 @@
+<app title="Create Target Born Unowned And Dead" version="0.1">
+
+    <client>
+
+        {email = ""}
+        {password = ""}
+        {draft = ""}
+
+        <login type="button" action="apskel.auth.loginUser(email, password)">Log In</login>
+
+        <projects type="layout" orient="vertical" table="cu_projects" record="1">
+            Name: {.name}
+        </projects>
+
+        <composer type="layout" orient="horizontal">
+            <draftInput type="text-input" field="draft" placeholder="Item"/>
+            <post type="button" action='apskel.data.create("cu_items", "body", draft)'>Post</post>
+        </composer>
+
+    </client>
+
+    <data>
+        <graph name="g">
+            <users>
+                <cu_projects>
+                    <cu_items write="owner"/>
+                </cu_projects>
+            </users>
+        </graph>
+    </data>
+
+</app>

@@ -1,0 +1,24 @@
+<app title="Call Site Supplies @user" version="0.1">
+
+    <client>
+
+        {email = ""}
+        {password = ""}
+        {x = ""}
+
+        <login type="button" action="apskel.auth.loginUser(email, password)">Log In</login>
+
+        <drafts type="layout" orient="vertical" source="myDrafts(app.x)">
+            {.title}
+        </drafts>
+
+    </client>
+
+    <data>
+        <query name="myDrafts" params="@user" tables="drafts" read="users"/>
+        <graph name="g">
+            <drafts/>
+        </graph>
+    </data>
+
+</app>

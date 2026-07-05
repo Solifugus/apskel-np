@@ -1,0 +1,14 @@
+<app title="Create Action Names A Missing Column" version="0.1">
+
+    <client>
+
+        {draft = ""}
+
+        <composer type="layout" orient="horizontal">
+            <draftInput type="text-input" field="draft" placeholder="Say something"/>
+            <post type="button" action='apskel.data.create("cb_items", "bodyy", draft)'>Post</post>
+        </composer>
+
+    </client>
+
+</app>

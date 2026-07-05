@@ -723,3 +723,72 @@ terminal. Cleanup after verifying:
   paths, per-row scratch state, INSERT/DELETE broadcasts creating and
   destroying instances, the resolver re-run locally over inserted
   subtrees.
+
+## Phase 9 fixtures (design session 5: publish era)
+
+### fail-fieldset-odd/ — must fail at load
+
+`apskel.field.set(app.view, "editor", app.editionId)` — three arguments.
+`field.set` takes (target, value) pairs; odd arity is a load error
+naming the site.
+
+### fail-fieldset-pair-literal/ — must fail at load
+
+`apskel.field.set(app.view, "editor", "app.editionId", 5)` — the arity
+is even but the SECOND pair's target is a quoted literal. Every
+odd-position argument must be a write-target reference; the existing
+`fail-fieldset-literal/` pins the first slot, this one pins a later
+slot.
+
+### fail-user-param-passed/ — must fail at load
+
+`source="myDrafts(app.x)"` against `<query params="@user">` — the
+call-grammar arity check counts only non-`@` params, so `myDrafts`
+takes zero call-site arguments; supplying one is the same arity load
+error as any other. (`@user` is filled server-side from the token,
+never from the caller.) The fixture is an auth app so the tokenless
+check below cannot fire first.
+
+### fail-user-param-noauth/ — must fail at load
+
+`<query params="@user">` in an app that never calls `apskel.auth.*` —
+there is no identity to fill the parameter from. XML-knowable, so a
+load error naming the query declaration.
+
+### fail-user-param-unknown/ — must fail at load
+
+`<query params="@owner">` — `@user` is the only reserved parameter; any
+other `@`-prefixed name is a load error naming the declaration.
+
+### Startup fixtures — schema variant per case, verified the 7.2 way
+
+Run `node tools/run.js test/fixtures/<name>` and read the error in the
+terminal. Cleanup after verifying:
+
+    DROP TABLE IF EXISTS cb_items, cu_items, cu_projects CASCADE;
+
+* `startup-create-badcolumn/` — a create action targets `cb_items`,
+  which no collection binds (create-declared insert target), naming
+  column `bodyy` where the table has `body` → startup error naming the
+  action site, the table, and the missing column.
+* `startup-create-unowned/` — the create target `cu_items` is
+  `write="owner"` and owner-WALKABLE (via `cu_projects` → `users`) but
+  has no DIRECT users FK, so an insert cannot be ownership-stamped at
+  birth → the born-unowned-and-dead startup error. The walk being fine
+  is the point: field writes would guard, only insertion is impossible.
+
+### Wire behavior (fake db, with Phase 9's harness)
+
+* `@user`: an anonymous `apskel.data.select` against a `@user` query →
+  401 regardless of its read rule; authenticated, the parameter slot is
+  filled from the token — a forged value in the envelope changes
+  nothing.
+* `field.set` pairs: all assignments land before one cascade settles,
+  origin `user`.
+* Insert targets from create actions: the table/columns named by a
+  resolved `apskel.data.create` are insertable exactly like
+  collection-bound ones — ownership stamped from the token, claimed
+  stamp values stripped.
+* DB rejections on `apskel.data.set` / `.delete` (e.g. the KF published-
+  edition immutability trigger) answer 400 carrying the database's
+  message, as insert already does — never a 500.

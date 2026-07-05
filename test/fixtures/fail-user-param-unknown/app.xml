@@ -1,0 +1,18 @@
+<app title="Unknown @-Parameter" version="0.1">
+
+    <client>
+
+        <list type="layout" orient="vertical" source="theirs">
+            {.title}
+        </list>
+
+    </client>
+
+    <data>
+        <query name="theirs" params="@owner" tables="things" read="public"/>
+        <graph name="g">
+            <things/>
+        </graph>
+    </data>
+
+</app>
