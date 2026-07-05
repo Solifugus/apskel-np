@@ -2217,6 +2217,35 @@ ever**. Expositions need nothing new from the framework: the
 has-tag/lacks-tag rule builder is app UI writing `exposition_tag_rules`
 rows that a named server-defined query consumes.
 
+RESOLVED (row creation and deletion — the minimal Wire surface): the
+composer RESOLVED entry ("insertion is not a repetition concern") left
+the save action's mechanics open; Phase 8 needs them. Two wire types,
+symmetric with the rest of the data surface:
+
+* `apskel.data.insert {table, values}` — table and columns allowlisted to
+  the app's own collection-bound tables and bound columns; gated by the
+  table's **write rule**. Ownership at birth: when the table has a direct
+  FK to `users`, the server stamps it from the authenticated identity —
+  the client can never claim ownership (a client-supplied value for that
+  column is overwritten, not trusted). A `write="owner"` table with no
+  direct users FK rejects inserts at startup validation: the row would be
+  born unowned and dead by the unowned-denies floor. The server assigns
+  the id (identity/serial column), returns the new row, and broadcasts
+  `apskel.data.inserted {table, id, values}` scoped by the read rule.
+* `apskel.data.delete {table, id}` — write rule plus the owner walk,
+  exactly like a field write; broadcasts `apskel.data.deleted` scoped by
+  the read rule.
+
+The composer itself is ordinary, per the existing entry: local scratch
+fields plus a button whose action is the framework function
+`apskel.data.create("messages", "body", draft)` — first argument the
+table (string literal), then alternating column-literal / value-reference
+pairs, arity and column names load-validated. Its deletion counterpart is
+`apskel.data.remove("messages", .id)` — the id argument is an ordinary
+reference, read at press time like any action argument. Both clear
+nothing and prompt nothing in v0.x; the row appears/disappears through
+the same broadcast path as anyone else's insert or delete.
+
 ---
 
 # Future Non-Web GUI Renderers
