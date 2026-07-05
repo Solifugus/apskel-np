@@ -626,3 +626,100 @@ verifying:
   selection-change fetch window; empty selection reads `undefined` (not
   `[]`) with sends suppressed; options fetch failure → empty options +
   console warning, no retry.
+
+---
+
+## Phase 8 — collection sources (design session 4) + collection binding
+
+Fixtures written before code, per the standing discipline; the harness
+lands with Phase 8's implementation.
+
+### collection-source/ — must load successfully
+
+Exercises all four source forms from the session-4 entries:
+
+* `published`: query source, bare form (`source="publishedEditions"`),
+  with `order=".created_at desc"` and `limit="10"` wrapping the query.
+* `mine`: table source with a **dynamic reference filter**
+  (`filter=".created_by: app.identity.userId"`) — a change to the
+  reference value re-runs the fetch, like a selection change.
+* `reader`: a **query-sourced record context**
+  (`source="publishedEditions" record="app.currentEditionId"`) — text
+  refs only; reads go through the query wrap.
+* `byTag`: parameterized call-grammar mount
+  (`source="publishedByTag(app.currentTag)"`), arity load-checked
+  against the declared `params="tag"`.
+
+Serialize emits the query registry (name, params, tables, read rule) and
+per-binding source metadata (filter/order/limit composed); `queries/`
+holds the SQL bodies.
+
+### fail-filter-on-query/ — must fail at load
+
+`filter=` on a query source — a query owns its own WHERE.
+
+### fail-filter-bare/ — must fail at load
+
+`filter=".archived"` — no bare-truthiness form; explicit domains only.
+
+### fail-query-input/ — must fail at load
+
+A `field=` input binding under a query-sourced context — query sources
+are read-only by grammar.
+
+### fail-conflict-on-query/ — must fail at load
+
+`conflict=` on a query-sourced context — conflict policy belongs to
+writable table contexts.
+
+### fail-query-unknown/ — must fail at load
+
+`source="nosuch"` with no `<query name="nosuch">` declared.
+
+### fail-query-arity/ — must fail at load
+
+`source="publishedEditions(app.x, 3)"` against a query declaring no
+params — call arity is load-checked like a framework function's.
+
+### fail-query-read-owner/ — must fail at load
+
+`<query read="owner">` — the query read menu is `public`, `users`; a
+list is not a row, so there is no owner query.
+
+### fail-query-no-tables/ — must fail at load
+
+`<query>` without `tables=` — the refresh dependency list is mandatory
+and author-declared (a wrong list means a stale list; an absent one
+means nothing refreshes, which is not a choice the framework offers).
+
+### Startup fixtures — schema variant per case, verified the 7.2 way
+
+Run `node tools/run.js test/fixtures/<name>` and read the error in the
+terminal. Cleanup after verifying:
+
+    DROP TABLE IF EXISTS qm_items, qu_items, qn_items CASCADE;
+
+* `startup-query-missing/` — `<query name="qm_list">` declared but
+  `queries/qm_list.sql` does not exist → startup error naming the query
+  and the expected path.
+* `startup-query-notselect/` — the SQL body is an UPDATE → startup
+  error: a query is one SELECT statement.
+* `startup-query-noid/` — `SELECT name FROM qn_items` exposes no `id`
+  column → startup error: queries must be row-addressable (the LIMIT-0
+  execution is where this is caught).
+
+### Wire and freshness (fake db + fakes, with Phase 8's harness)
+
+* `apskel.data.select`: gated by the table's or query's read rule (401
+  anonymous against `read="users"`, rows against `public`); returns id +
+  bound columns only, never `*`; filter/order/limit composed
+  server-side, parameterized.
+* Table-sourced membership maintained client-side: a broadcast flipping
+  the filtered column moves the row in/out of the list without a
+  re-fetch.
+* Query-sourced collections re-fetch on a broadcast naming a `tables=`
+  table, and on a param change.
+* Repetition per the Collection Binding entries: PK-keyed instance
+  paths, per-row scratch state, INSERT/DELETE broadcasts creating and
+  destroying instances, the resolver re-run locally over inserted
+  subtrees.

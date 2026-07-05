@@ -1,0 +1,18 @@
+<app title="Conflict On A Query Source" version="0.1">
+
+    <client>
+
+        <reader type="layout" orient="vertical" source="publishedEditions" record="1" conflict="detect">
+            {.title}
+        </reader>
+
+    </client>
+
+    <data>
+        <query name="publishedEditions" tables="articles, article_editions" read="public"/>
+        <graph name="g">
+            <articles/>
+        </graph>
+    </data>
+
+</app>

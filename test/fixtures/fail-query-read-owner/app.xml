@@ -1,0 +1,15 @@
+<app title="No Owner Queries" version="0.1">
+
+    <client>
+
+        <list type="layout" orient="vertical" source="myList">
+            {.title}
+        </list>
+
+    </client>
+
+    <data>
+        <query name="myList" tables="articles" read="owner"/>
+    </data>
+
+</app>

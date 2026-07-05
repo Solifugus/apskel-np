@@ -1,0 +1,18 @@
+<app title="Filter On A Query Source" version="0.1">
+
+    <client>
+
+        <list type="layout" orient="vertical" source="publishedEditions" filter=".title: x">
+            {.title}
+        </list>
+
+    </client>
+
+    <data>
+        <query name="publishedEditions" tables="articles, article_editions" read="public"/>
+        <graph name="g">
+            <articles/>
+        </graph>
+    </data>
+
+</app>

@@ -1,0 +1,36 @@
+<app title="Collection Sources" version="0.1">
+
+    <client>
+
+        {currentEditionId = ""}
+        {currentTag = ""}
+
+        <published type="layout" orient="vertical" source="publishedEditions" order=".created_at desc" limit="10">
+            {.title}
+        </published>
+
+        <mine type="layout" orient="vertical" table="articles" filter=".created_by: app.identity.userId" order=".id">
+            Article {.id}
+        </mine>
+
+        <reader type="layout" orient="vertical" source="publishedEditions" record="app.currentEditionId">
+            Title: {.title}
+        </reader>
+
+        <byTag type="layout" orient="vertical" source="publishedByTag(app.currentTag)">
+            {.title}
+        </byTag>
+
+    </client>
+
+    <data>
+        <query name="publishedEditions" tables="articles, article_editions" read="public"/>
+        <query name="publishedByTag" params="tag" tables="articles, article_editions, tags, article_tags" read="public"/>
+        <graph name="knowledge">
+            <users>
+                <articles read="public" write="owner"/>
+            </users>
+        </graph>
+    </data>
+
+</app>

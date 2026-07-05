@@ -1,0 +1,15 @@
+<app title="Query File Missing" version="0.1">
+
+    <client>
+
+        <list type="layout" orient="vertical" source="qm_list">
+            {.name}
+        </list>
+
+    </client>
+
+    <data>
+        <query name="qm_list" tables="qm_items" read="public"/>
+    </data>
+
+</app>

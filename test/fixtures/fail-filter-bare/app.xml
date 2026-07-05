@@ -1,0 +1,18 @@
+<app title="Bare Filter" version="0.1">
+
+    <client>
+
+        <list type="layout" orient="vertical" table="articles" filter=".archived">
+            {.id}
+        </list>
+
+    </client>
+
+    <data>
+        <query name="publishedEditions" tables="articles, article_editions" read="public"/>
+        <graph name="g">
+            <articles/>
+        </graph>
+    </data>
+
+</app>

@@ -1,0 +1,15 @@
+<app title="Query Must Be One SELECT" version="0.1">
+
+    <client>
+
+        <list type="layout" orient="vertical" source="qu_list">
+            {.name}
+        </list>
+
+    </client>
+
+    <data>
+        <query name="qu_list" tables="qu_items" read="public"/>
+    </data>
+
+</app>

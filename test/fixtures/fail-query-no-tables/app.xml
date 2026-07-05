@@ -1,0 +1,15 @@
+<app title="Tables Declaration Is Mandatory" version="0.1">
+
+    <client>
+
+        <list type="layout" orient="vertical" source="myList">
+            {.title}
+        </list>
+
+    </client>
+
+    <data>
+        <query name="myList" read="public"/>
+    </data>
+
+</app>

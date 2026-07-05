@@ -1,0 +1,15 @@
+<app title="Query Must Expose id" version="0.1">
+
+    <client>
+
+        <list type="layout" orient="vertical" source="qn_list">
+            {.name}
+        </list>
+
+    </client>
+
+    <data>
+        <query name="qn_list" tables="qn_items" read="public"/>
+    </data>
+
+</app>
