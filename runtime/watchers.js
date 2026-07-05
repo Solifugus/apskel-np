@@ -72,6 +72,18 @@ export class WatcherEngine {
     this.#effectHandlers.push(handler);
   }
 
+  // Remove watchers by predicate — Phase 8's instance destruction: a
+  // destroyed collection instance takes its watchers with it (matched by
+  // name, which carries the PK-keyed instance path).
+  unwatch(match) {
+    this.#watchers = this.#watchers.filter((w) => !match(w));
+    for (const [field, list] of this.#byField) {
+      const kept = list.filter((w) => !match(w));
+      if (kept.length) this.#byField.set(field, kept);
+      else this.#byField.delete(field);
+    }
+  }
+
   // Lifetime firings per watcher name — the observable form of echo
   // suppression: a server-origin change must leave the wire send watcher's
   // count unchanged. Exposed in the browser via window.__apskel.

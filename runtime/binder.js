@@ -11,8 +11,9 @@
 // (ctx.dom). It never holds field values — the store owns every value.
 
 export function mountApp(root, { store, engine, document, primitives, rootEl, functions = {} }) {
+  const collections = new Map(); // collection path -> controller
   mountContent(root, rootEl);
-  return root;
+  return { root, collections };
 
   function mountContent(node, hostEl) {
     const childrenByName = new Map(node.children.map((c) => [c.name, c]));
@@ -95,7 +96,57 @@ export function mountApp(root, { store, engine, document, primitives, rootEl, fu
       }
     }
 
+    if (node.isCollection) {
+      // Repetition is what it means to bind to a collection: the node's
+      // CONTENT is a template, stamped once per row with a PK-keyed
+      // instance path — instantiation, not resolution. The sync layer
+      // (wireClient.attachCollectionSync) drives this controller from
+      // apskel.data.select and the broadcast stream.
+      collections.set(node.path, makeCollectionController(node, host));
+      return;
+    }
+
     mountContent(node, host);
+  }
+
+  function makeCollectionController(node, host) {
+    const instances = new Map(); // String(id) -> {el}
+    return {
+      has: (id) => instances.has(String(id)),
+      ids: () => [...instances.keys()],
+      // beforeId: DOM position (order= maintenance); null appends.
+      instantiate(id, values, beforeId = null) {
+        const key = String(id);
+        if (instances.has(key)) return;
+        const inst = remapInstance(node, node.path, id);
+        // Row values seed silently BEFORE mount — the one place silent
+        // seeding is correct; per-instance declared locals likewise.
+        for (const [col, v] of Object.entries(values)) {
+          if (col !== "id") store.seed(`${inst.path}.${col}`, v);
+        }
+        store.seed(`${inst.path}.id`, values.id ?? id);
+        store.seedDeclaredLocals(inst);
+        const wrap = document.createElement("div");
+        wrap.className = "apskel apskel-row";
+        wrap.dataset.path = inst.path;
+        const before = beforeId !== null ? instances.get(String(beforeId))?.el : null;
+        host.insertBefore(wrap, before ?? null);
+        mountContent(inst, wrap);
+        instances.set(key, { el: wrap });
+      },
+      destroy(id) {
+        const key = String(id);
+        const inst = instances.get(key);
+        if (!inst) return;
+        inst.el.remove();
+        instances.delete(key);
+        const marker = `${node.path}[${id}]`;
+        engine.unwatch((w) => w.name.includes(marker));
+      },
+      clear() {
+        for (const key of [...instances.keys()]) this.destroy(key);
+      },
+    };
   }
 
   function handleInput(node, slot, value) {
@@ -127,6 +178,33 @@ export function mountApp(root, { store, engine, document, primitives, rootEl, fu
   function display(value) {
     return value == null ? "" : String(value);
   }
+}
+
+// Stamp one instance of a collection template: a deep, Map-aware clone in
+// which every string rooted at the collection's path gains the PK key —
+// app.board.body -> app.board[7].body. External paths (app.view, absolute
+// refs) don't start with the prefix and pass through untouched, so a
+// template's reach outside itself survives instantiation. Exported for
+// the Node harness.
+export function remapInstance(json, basePath, id) {
+  const prefix = basePath + ".";
+  const replacement = `${basePath}[${id}].`;
+  const walk = (v) => {
+    if (typeof v === "string") {
+      if (v === basePath) return `${basePath}[${id}]`;
+      if (v.startsWith(prefix)) return replacement + v.slice(prefix.length);
+      return v;
+    }
+    if (Array.isArray(v)) return v.map(walk);
+    if (v instanceof Map) return new Map([...v].map(([k, val]) => [k, walk(val)]));
+    if (v && typeof v === "object") {
+      const out = {};
+      for (const k of Object.keys(v)) out[k] = walk(v[k]);
+      return out;
+    }
+    return v;
+  };
+  return walk(json);
 }
 
 // Argument values at press time: literals pass through, refs read the store

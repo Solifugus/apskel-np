@@ -1,0 +1,21 @@
+<app title="Message Board" version="0.1">
+
+    <client>
+
+        {draft = ""}
+
+        <composer type="layout" orient="horizontal">
+            <draftInput type="text-input" field="draft" placeholder="Say something"/>
+            <post type="button" action='apskel.data.create("messages", "body", draft)'>Post</post>
+        </composer>
+
+        <board type="layout" orient="vertical" table="messages" order=".id desc" limit="20">
+            <row type="layout" orient="horizontal">
+                {.body}
+                <zap type="button" action='apskel.data.remove("messages", .id)'>delete</zap>
+            </row>
+        </board>
+
+    </client>
+
+</app>

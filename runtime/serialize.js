@@ -119,6 +119,8 @@ export function collectBoundFields(root) {
   for (const site of root.allRefs) {
     const binding = site.binding;
     if (!binding || binding.kind !== "bound") continue;
+    if (!binding.table) continue; // query-context fields: collectQueryBound
+    if (binding.target.isCollection) continue; // template refs: collectCollections
     const storePath = storePathOf(binding);
     if (byStorePath.has(storePath)) continue;
     const target = binding.target;
@@ -194,6 +196,42 @@ export function collectSetFields(root) {
   return [...byStorePath.values()];
 }
 
+// Query-sourced RECORD contexts' bound fields (read-only): the store
+// path, the query and its call args, the record selection, and the
+// column. apskel.data.get for these goes through the query wrap.
+export function collectQueryBound(root) {
+  const byStorePath = new Map();
+  for (const site of root.allRefs) {
+    const binding = site.binding;
+    if (!binding || binding.kind !== "bound" || binding.table) continue;
+    if (binding.target.isCollection) continue;
+    const storePath = storePathOf(binding);
+    if (byStorePath.has(storePath)) continue;
+    const target = binding.target;
+    const rawRecord = target.attrs.record ?? null;
+    const src = target.sourceSite.binding;
+    const entry = {
+      storePath,
+      path: binding.targetPath,
+      query: src.name,
+      args: src.args.map((a) =>
+        a.kind === "literal"
+          ? { kind: "literal", value: JSON.parse(a.value) }
+          : { kind: "ref", storePath: storePathOf(a.binding) }
+      ),
+      record: target.recordSite
+        ? null
+        : rawRecord !== null && /^\d+$/.test(rawRecord)
+          ? Number(rawRecord)
+          : rawRecord,
+      field: binding.field,
+    };
+    if (target.recordSite) entry.recordPath = storePathOf(target.recordSite.binding);
+    byStorePath.set(storePath, entry);
+  }
+  return [...byStorePath.values()];
+}
+
 // The declared queries, plain: name, params, tables (the author-declared
 // refresh dependency list), read rule. SQL bodies stay server-side in
 // queries/<name>.sql — never in the bundle.
@@ -218,6 +256,16 @@ export function collectCollections(root) {
       for (const site of root.allRefs) {
         if (site.binding?.kind === "bound" && site.binding.target === node) {
           columns.add(site.binding.field);
+        }
+        // Function-call arguments (a row button's .id) are sub-bindings
+        // inside the call, not allRefs entries — they need their columns
+        // fetched too.
+        if (site.binding?.kind === "function") {
+          for (const a of site.binding.args) {
+            if (a.kind === "ref" && a.binding?.kind === "bound" && a.binding.target === node) {
+              columns.add(a.binding.field);
+            }
+          }
         }
       }
       const entry = {

@@ -539,6 +539,26 @@ function resolveFunction(site, expr, root) {
   if (name === "apskel.nav.go" && args.length !== 1) {
     fail(site, `apskel.nav.go takes exactly one argument (the path)`);
   }
+  if (name === "apskel.data.create") {
+    const isStringLit = (a) => a.kind === "literal" && a.value.startsWith('"');
+    if (args.length < 3 || (args.length - 1) % 2 !== 0 || !isStringLit(args[0])) {
+      fail(
+        site,
+        `apskel.data.create takes ("table", "column", value, ...) — the table and ` +
+          `column names are string literals, in pairs`
+      );
+    }
+    for (let i = 1; i < args.length; i += 2) {
+      if (!isStringLit(args[i])) {
+        fail(site, `apskel.data.create argument ${i + 1} must be a "column" string literal`);
+      }
+    }
+  }
+  if (name === "apskel.data.remove") {
+    if (args.length !== 2 || args[0].kind !== "literal" || !args[0].value.startsWith('"')) {
+      fail(site, `apskel.data.remove takes ("table", idReference)`);
+    }
+  }
   return { kind: "function", name, args };
 }
 

@@ -51,6 +51,7 @@ let token = null;
 let functions = {};
 let credentials = null;
 let recordContexts = null; // assigned below; onToken refetches through it
+let collectionSync = null; // assigned below; onToken can unlock lists
 let reconnectEvents = () => {}; // assigned below; onToken re-identifies the SSE feed
 let refetchOptions = () => {}; // assigned below; onToken can unlock option lists
 
@@ -91,6 +92,7 @@ if (bundle.auth) {
     // and the SSE connection's identity is stamped at connect, so it must
     // reconnect to start receiving users/owner-scoped broadcasts.
     recordContexts?.refetchAll();
+    collectionSync?.refetchAll();
     reconnectEvents();
     refetchOptions();
   };
@@ -122,7 +124,7 @@ for (const type of bundle.primitiveTypes) {
   primitives[type] = await import(`/primitives/${type}/client.js`);
 }
 
-mountApp(root, {
+const { collections: collectionControllers } = mountApp(root, {
   store,
   engine,
   document,
@@ -143,9 +145,8 @@ window.__apskel = {
 };
 
 if (bundle.wire) {
-  const { attachWireSend, attachWireReceive, attachRecordContexts } = await import(
-    "/runtime/wireClient.js"
-  );
+  const { attachWireSend, attachWireReceive, attachRecordContexts, attachCollectionSync } =
+    await import("/runtime/wireClient.js");
   // Per-tab identity for echo recognition (distinct from the device
   // credential, which identifies the user).
   const clientId = "tab-" + crypto.randomUUID();
@@ -219,6 +220,32 @@ if (bundle.wire) {
     revisions,
   });
 
+  // Collections: initial select per collection, instances driven through
+  // the binder's controllers, membership maintained from broadcasts.
+  collectionSync = attachCollectionSync({
+    engine,
+    store,
+    collections: bundle.collections ?? [],
+    queries: bundle.queries ?? [],
+    controllers: collectionControllers,
+    call,
+  });
+
+  // The composer's framework functions, per RESOLVED (row creation and
+  // deletion): create posts the whole values object, remove deletes by
+  // id; the row appears/disappears through the broadcast path like
+  // anyone else's.
+  functions["apskel.data.create"] = async (table, ...pairs) => {
+    const values = {};
+    for (let i = 0; i + 1 < pairs.length; i += 2) values[pairs[i]] = pairs[i + 1];
+    const resp = await call({ type: "apskel.data.insert", table, values, sourceClient: clientId });
+    if (!resp?.ok) console.warn("[apskel] insert rejected:", resp?.error);
+  };
+  functions["apskel.data.remove"] = async (table, id) => {
+    const resp = await call({ type: "apskel.data.delete", table, id, sourceClient: clientId });
+    if (!resp?.ok) console.warn("[apskel] delete rejected:", resp?.error);
+  };
+
   // Option lists for edge-bound widgets: fetched at mount into the
   // widget's OWN options path via the server-origin door, refetched on
   // login (a token can unlock a users-read options table) and on
@@ -268,7 +295,11 @@ if (bundle.wire) {
     events?.close();
     const url = bundle.wire.events + (token ? `?token=${encodeURIComponent(token)}` : "");
     events = new EventSource(url);
-    events.onmessage = (e) => handleEvent(JSON.parse(e.data));
+    events.onmessage = (e) => {
+      const envelope = JSON.parse(e.data);
+      handleEvent(envelope);
+      collectionSync?.handleEvent(envelope);
+    };
   };
   reconnectEvents();
   window.__apskel.clientId = clientId;

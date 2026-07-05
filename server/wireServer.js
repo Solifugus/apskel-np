@@ -17,6 +17,8 @@
 // by the read rule, per RESOLVED (broadcasts obey read rules). Apps
 // without identity stay tokenless and unfiltered — Phase 4 exactly.
 
+import fs from "node:fs";
+import path from "node:path";
 import express from "express";
 
 // Fixed, non-overridable rules for the framework identity tables, per
@@ -37,10 +39,33 @@ const DEFAULT_RULES = { read: "users", write: "users" }; // pre-7.2 behavior
 
 export function attachWire(
   app,
-  { db, bound, log = console, auth = null, permissions = [], setFields = [] }
+  {
+    db,
+    bound,
+    log = console,
+    auth = null,
+    permissions = [],
+    setFields = [],
+    collections = [],
+    queries = [],
+    queryBound = [],
+    insertStamps = new Map(),
+  }
 ) {
   const allowlist = new Map(bound.map((b) => [`${b.table}.${b.field}`, b]));
   const permByTable = new Map(permissions.map((p) => [p.table, p]));
+  const collectionsByPath = new Map(collections.map((c) => [c.path, c]));
+  const queriesByName = new Map(queries.map((q) => [q.name, q]));
+  const queryBoundByKey = new Map(queryBound.map((b) => [`${b.query}.${b.field}`, b]));
+  // Insertable tables and their column allowlists come from the app's own
+  // table-sourced collections, per RESOLVED (row creation and deletion).
+  const insertColumns = new Map();
+  for (const c of collections) {
+    if (!c.table) continue;
+    const cols = insertColumns.get(c.table) ?? new Set();
+    for (const col of c.columns) cols.add(col);
+    insertColumns.set(c.table, cols);
+  }
   // Set fields by parent:edge, per RESOLVED (membership writes are
   // whole-set replaces); their options descriptors form the options
   // allowlist — arbitrary column pairs never reach SQL.
@@ -233,9 +258,209 @@ export function attachWire(
       res.json({ ok: true, options: result.rows });
     },
 
+    // The collection read, per RESOLVED (apskel.data.select and collection
+    // freshness): the client names its own resolved collection by path —
+    // nothing else about the SQL comes from the wire. Filter reference
+    // values and query params arrive positionally; everything else is the
+    // load-resolved spec. Returns id plus the template's bound columns.
+    "apskel.data.select": async (envelope, req, res) => {
+      const c = collectionsByPath.get(envelope.path);
+      if (!c) {
+        return res
+          .status(400)
+          .json({ ok: false, error: `no collection at path '${envelope.path}' in this app` });
+      }
+      if (auth) {
+        const rule = c.query ? queriesByName.get(c.query.name).read : rulesFor(c.table).read;
+        if (rule === "owner") {
+          // A list is not a row: owner-read tables have no listable form.
+          return res
+            .status(403)
+            .json({ ok: false, error: `select on ${c.table} requires per-row read` });
+        }
+        if (rule !== "public" && !auth.identity(req)) {
+          return res.status(401).json({ ok: false, error: "authentication required" });
+        }
+      }
+      const cols = ["id", ...c.columns.filter((x) => x !== "id")];
+      const params = [];
+      let sql;
+      if (c.query) {
+        const q = queriesByName.get(c.query.name);
+        const given = Array.isArray(envelope.params) ? envelope.params : [];
+        if (given.length !== q.params.length) {
+          return res
+            .status(400)
+            .json({ ok: false, error: `query '${q.name}' takes ${q.params.length} parameter(s)` });
+        }
+        params.push(...given);
+        sql = `SELECT ${cols.map(quoteIdent).join(", ")} FROM (${q.sql}) q`;
+      } else {
+        sql = `SELECT ${cols.map(quoteIdent).join(", ")} FROM ${quoteIdent(c.table)}`;
+        if (c.filter) {
+          const values = [];
+          let refIndex = 0;
+          const given = Array.isArray(envelope.filterValues) ? envelope.filterValues : [];
+          for (const item of c.filter.items) {
+            values.push(item.kind === "literal" ? item.value : given[refIndex++]);
+          }
+          params.push(values);
+          sql += ` WHERE ${quoteIdent(c.filter.column)} = ANY($${params.length})`;
+        }
+      }
+      if (c.order) sql += ` ORDER BY ${quoteIdent(c.order.column)} ${c.order.dir === "desc" ? "DESC" : "ASC"}`;
+      if (c.limit !== null && c.limit !== undefined) sql += ` LIMIT ${c.limit}`;
+      const result = await db.query(sql, params);
+      res.json({ ok: true, rows: result.rows });
+    },
+
+    // Row creation, per RESOLVED (row creation and deletion): table and
+    // columns allowlisted to the app's own collection-bound surface; the
+    // write rule gates; ownership is stamped server-side at birth — a
+    // client-supplied value for the stamp column is overwritten, never
+    // trusted.
+    "apskel.data.insert": async (envelope, req, res) => {
+      const { table, sourceClient } = envelope;
+      const allowed = insertColumns.get(table);
+      if (!allowed) {
+        return res
+          .status(400)
+          .json({ ok: false, error: `no collection-bound table '${table}' in this app` });
+      }
+      const values = envelope.values && typeof envelope.values === "object" ? envelope.values : {};
+      const stamp = insertStamps.get(table) ?? null;
+      // A client-supplied value for the stamp column is overwritten, never
+      // trusted — stripped before the allowlist even looks at it.
+      if (stamp) delete values[stamp];
+      for (const col of Object.keys(values)) {
+        if (!allowed.has(col)) {
+          return res
+            .status(400)
+            .json({ ok: false, error: `column '${col}' is not bound on '${table}'` });
+        }
+      }
+      let identity = null;
+      if (auth) {
+        const rule = rulesFor(table).write;
+        if (rule === "none") {
+          return res
+            .status(403)
+            .json({ ok: false, error: `write on ${table} is not allowed over the wire` });
+        }
+        identity = auth.identity(req);
+        if (!identity) {
+          return res.status(401).json({ ok: false, error: "authentication required" });
+        }
+        if (stamp) values[stamp] = identity.userId; // ownership at birth
+      }
+      const cols = Object.keys(values);
+      const sql =
+        `INSERT INTO ${quoteIdent(table)} ` +
+        (cols.length
+          ? `(${cols.map(quoteIdent).join(", ")}) VALUES (${cols.map((_, i) => `$${i + 1}`).join(", ")})`
+          : `DEFAULT VALUES`) +
+        ` RETURNING id`;
+      let result;
+      try {
+        result = await db.query(sql, Object.values(values));
+      } catch (e) {
+        return res.status(400).json({ ok: false, error: `insert rejected: ${e.message}` });
+      }
+      const id = result.rows[0]?.id;
+      const g = { ownerUserId: identity?.userId ?? null };
+      await broadcastAccepted(g, {
+        type: "apskel.data.inserted",
+        table,
+        id,
+        values,
+        sourceClient: sourceClient ?? null,
+      });
+      res.json({ ok: true, id, values });
+    },
+
+    // Row deletion: the write rule plus the owner walk, exactly like a
+    // field write.
+    "apskel.data.delete": async (envelope, req, res) => {
+      const { table, id, sourceClient } = envelope;
+      if (!insertColumns.has(table)) {
+        return res
+          .status(400)
+          .json({ ok: false, error: `no collection-bound table '${table}' in this app` });
+      }
+      if (id === undefined || id === null) {
+        return res.status(400).json({ ok: false, error: "missing id" });
+      }
+      let g = { ownerUserId: null };
+      if (auth) {
+        const rules = rulesFor(table);
+        if (rules.write === "none") {
+          return res
+            .status(403)
+            .json({ ok: false, error: `write on ${table} is not allowed over the wire` });
+        }
+        const identity = auth.identity(req);
+        if (!identity) {
+          return res.status(401).json({ ok: false, error: "authentication required" });
+        }
+        if (rules.write === "owner") {
+          const owner = await ownerOf(table, id);
+          if (owner === null || String(owner) !== String(identity.userId)) {
+            return res.status(403).json({ ok: false, error: `write on ${table} requires owner` });
+          }
+          g.ownerUserId = owner;
+        }
+      }
+      const result = await db.query(`DELETE FROM ${quoteIdent(table)} WHERE id = $1`, [id]);
+      if (result.rowCount === 0) {
+        return res.status(404).json({ ok: false, error: `no ${table} row with id ${id}` });
+      }
+      await broadcastAccepted(g, {
+        type: "apskel.data.deleted",
+        table,
+        id,
+        sourceClient: sourceClient ?? null,
+      });
+      res.json({ ok: true });
+    },
+
     // The read counterpart, per RESOLVED (reads through the Wire): same
-    // allowlist, value plus current revision for detect contexts.
+    // allowlist, value plus current revision for detect contexts. A
+    // query-context read arrives with query= instead of table= and goes
+    // through the query wrap, gated by the query's own read rule.
     "apskel.data.get": async (envelope, req, res) => {
+      if (envelope.query) {
+        const b = queryBoundByKey.get(`${envelope.query}.${envelope.field}`);
+        const q = queriesByName.get(envelope.query);
+        if (!b || !q) {
+          return res.status(400).json({
+            ok: false,
+            error: `no query-bound field '${envelope.query}.${envelope.field}' in this app`,
+          });
+        }
+        if (auth && q.read !== "public" && !auth.identity(req)) {
+          return res.status(401).json({ ok: false, error: "authentication required" });
+        }
+        if (envelope.id === undefined || envelope.id === null) {
+          return res.status(400).json({ ok: false, error: "missing id" });
+        }
+        const given = Array.isArray(envelope.params) ? envelope.params : [];
+        if (given.length !== q.params.length) {
+          return res
+            .status(400)
+            .json({ ok: false, error: `query '${q.name}' takes ${q.params.length} parameter(s)` });
+        }
+        const result = await db.query(
+          `SELECT ${quoteIdent(envelope.field)} AS value FROM (${q.sql}) q ` +
+            `WHERE q.id = $${given.length + 1}`,
+          [...given, envelope.id]
+        );
+        if (result.rows.length === 0) {
+          return res
+            .status(404)
+            .json({ ok: false, error: `no ${envelope.query} row with id ${envelope.id}` });
+        }
+        return res.json({ ok: true, value: result.rows[0].value });
+      }
       const g = await guardData(envelope, req, res, "read");
       if (!g) return;
       const b = g.b;
@@ -619,6 +844,111 @@ async function resolveOneEdge(db, s, dataNodes) {
     childColumn: childFks[0].col,
     memberType,
   };
+}
+
+// Startup resolution of declared queries, per RESOLVED (named queries are
+// declared, read-only sources): the SQL body lives in queries/<name>.sql
+// — one SELECT statement — and a LIMIT-0 execution proves it runs against
+// the live schema and exposes an id column plus every column the app
+// binds against it. Mutates each query entry, adding .sql and .fields.
+export async function resolveQueries(db, queries, { appDir, collections = [], queryBound = [] }) {
+  for (const q of queries) {
+    const file = path.join(appDir, "queries", `${q.name}.sql`);
+    if (!fs.existsSync(file)) {
+      throw new Error(`query '${q.name}' has no SQL body — expected ${file}`);
+    }
+    const sql = fs.readFileSync(file, "utf8").trim().replace(/;\s*$/, "");
+    if (!/^\s*select\b/i.test(sql) || sql.includes(";")) {
+      throw new Error(`query '${q.name}' must be a single SELECT statement (${file})`);
+    }
+    q.sql = sql;
+    let probe;
+    try {
+      probe = await db.query(
+        `SELECT * FROM (${sql}) q LIMIT 0`,
+        q.params.map(() => null)
+      );
+    } catch (e) {
+      throw new Error(`query '${q.name}' failed its LIMIT-0 startup check: ${e.message} (${file})`);
+    }
+    q.fields = (probe.fields ?? []).map((f) => f.name);
+    if (!q.fields.includes("id")) {
+      throw new Error(
+        `query '${q.name}' exposes no 'id' column — queries must be row-addressable ` +
+          `(columns: ${q.fields.join(", ") || "none"})`
+      );
+    }
+  }
+  const byName = new Map(queries.map((q) => [q.name, q]));
+  for (const c of collections) {
+    if (!c.query) continue;
+    const q = byName.get(c.query.name);
+    const missing = c.columns.filter((col) => !q.fields.includes(col));
+    if (missing.length) {
+      throw new Error(
+        `the collection at ${c.path} binds column(s) ${missing.join(", ")} that query ` +
+          `'${q.name}' does not expose (columns: ${q.fields.join(", ")})`
+      );
+    }
+    if (c.order && !q.fields.includes(c.order.column)) {
+      throw new Error(
+        `order column '${c.order.column}' on ${c.path} is not exposed by query '${q.name}'`
+      );
+    }
+  }
+  for (const b of queryBound) {
+    const q = byName.get(b.query);
+    if (q && !q.fields.includes(b.field)) {
+      throw new Error(
+        `'${b.storePath}' binds column '${b.field}' that query '${b.query}' does not expose`
+      );
+    }
+  }
+  return queries;
+}
+
+// Startup resolution of table-sourced collections: filter/order columns
+// must exist, and each insertable table resolves its ownership stamp —
+// the direct FK to users the server fills at birth, per RESOLVED (row
+// creation and deletion). A write="owner" table with no such FK rejects
+// inserts here: the row would be born unowned and dead.
+export async function resolveCollections(db, { collections, permissions = [] }) {
+  const permBy = new Map(permissions.map((p) => [p.table, p]));
+  const stamps = new Map();
+  let userFks = null;
+  for (const c of collections) {
+    if (!c.table) continue;
+    for (const col of [c.filter?.column, c.order?.column].filter(Boolean)) {
+      const r = await db.query(
+        `SELECT 1 FROM information_schema.columns WHERE table_name = $1 AND column_name = $2`,
+        [c.table, col]
+      );
+      if (r.rows.length === 0) {
+        throw new Error(`column '${c.table}.${col}' (filter/order on ${c.path}) does not exist`);
+      }
+    }
+    if (!stamps.has(c.table)) {
+      if (userFks === null) userFks = await fksReferencing(db, "users").catch(() => []);
+      const candidates = [
+        ...new Set(userFks.filter((f) => f.child_table === c.table).map((f) => f.col)),
+      ];
+      if (candidates.length > 1) {
+        throw new Error(
+          `table '${c.table}' has multiple FKs to users (${candidates.join(", ")}) — ` +
+            `the insert ownership stamp is ambiguous`
+        );
+      }
+      const stamp = candidates[0] ?? null;
+      if (!stamp && permBy.get(c.table)?.write === "owner") {
+        throw new Error(
+          `table '${c.table}' declares write="owner" but has no direct FK to users — ` +
+            `inserted rows would be born unowned and dead by the unowned-denies floor`
+        );
+      }
+      stamps.set(c.table, stamp);
+    }
+  }
+  return stamps;
 }
 
 async function fksReferencing(db, table) {

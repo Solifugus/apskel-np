@@ -24,12 +24,17 @@ import {
   collectUsesAuth,
   collectPermissions,
   collectSetFields,
+  collectQueries,
+  collectCollections,
+  collectQueryBound,
 } from "../runtime/serialize.js";
 import { createAppServer, attachShellFallback } from "../server/appServer.js";
 import {
   attachWire,
   resolvePermissionColumns,
   resolveSetFieldEdges,
+  resolveQueries,
+  resolveCollections,
 } from "../server/wireServer.js";
 import { createAuth } from "../server/authServer.js";
 import { fileURLToPath } from "node:url";
@@ -53,12 +58,20 @@ let bound;
 let usesAuth;
 let permissions;
 let setFields;
+let collections;
+let queryBound;
+let serverQueries;
 try {
   root = resolveReferences(loadApp(path.join(appDir, "app.xml")));
   bound = collectBoundFields(root);
   usesAuth = collectUsesAuth(root);
   permissions = collectPermissions(root);
   setFields = collectSetFields(root);
+  collections = collectCollections(root);
+  queryBound = collectQueryBound(root);
+  // Two copies on purpose: startup resolution adds .sql to the server's
+  // copy, and SQL bodies never ride the bundle to the browser.
+  serverQueries = collectQueries(root);
   baseBundle = serializeApp(root, {
     title: root.attrs.title ?? "Apskel App",
     style: root.clientAttrs.style ?? null,
@@ -66,6 +79,9 @@ try {
     bound,
     permissions,
     setFields,
+    collections,
+    queries: collectQueries(root),
+    queryBound,
     wire: { endpoint: "/wire", events: "/events" },
     auth: usesAuth,
   });
@@ -127,9 +143,12 @@ if (fs.existsSync(schemaFile)) {
 // The owner-walk FK columns and the set-field join edges come from the
 // live schema, never the XML — collisions and ambiguities are startup
 // errors naming the site, per RESOLVED (error taxonomy: load vs. startup).
+let insertStamps;
 try {
   await resolvePermissionColumns(db, permissions);
   await resolveSetFieldEdges(db, setFields, root.data.nodes);
+  await resolveQueries(db, serverQueries, { appDir, collections, queryBound });
+  insertStamps = await resolveCollections(db, { collections, permissions });
 } catch (e) {
   console.error(`STARTUP ERROR: ${e.message}`);
   process.exit(1);
@@ -166,7 +185,17 @@ const app = createAppServer({
   appDir,
   bundleProvider: async () => ({ ...baseBundle, ...(await fetchInitialData()) }),
 });
-attachWire(app, { db, bound, auth, permissions, setFields });
+attachWire(app, {
+  db,
+  bound,
+  auth,
+  permissions,
+  setFields,
+  collections,
+  queries: serverQueries,
+  queryBound,
+  insertStamps,
+});
 attachShellFallback(app); // deep links: /edit/2 serves the shell — last, so /wire and /events win
 
 app.listen(port, () => {

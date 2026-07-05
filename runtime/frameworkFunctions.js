@@ -18,6 +18,12 @@ export const FRAMEWORK_FUNCTION_NAMES = new Set([
   // nav.go is supplied by the boot once the router exists.
   "apskel.field.set",
   "apskel.nav.go",
+  // Row creation/deletion, per RESOLVED (row creation and deletion):
+  // create takes ("table", "column", value, ...) with table and column
+  // names as string literals, in pairs; remove takes ("table", idRef).
+  // Both are supplied by the boot's wire block.
+  "apskel.data.create",
+  "apskel.data.remove",
 ]);
 
 // deps:

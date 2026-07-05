@@ -282,3 +282,158 @@ export function attachRecordContexts({
     ready: Promise.all(all),
   };
 }
+
+// Collection sync, per RESOLVED (apskel.data.select and collection
+// freshness): the initial fetch and re-fetches instantiate through the
+// binder's controllers; between fetches, membership is maintained from
+// the broadcast stream. Table sources evaluate the filter locally
+// (literals and reference values are both client-knowable by
+// construction); query sources re-fetch when a broadcast names one of
+// their declared tables= or when a parameter changes.
+//
+// Known v0.x edges, stated: a membership GAIN on a changed row re-fetches
+// (one broadcast field is not a whole row); an edit to the ordered column
+// leaves the row's position stale until the next fetch; inputs inside
+// templates render but do not autosave yet (row editing in lists is
+// Phase 9's).
+export function attachCollectionSync({
+  engine,
+  store,
+  collections = [],
+  queries = [],
+  controllers,
+  call,
+  log = console,
+}) {
+  const queriesByName = new Map(queries.map((q) => [q.name, q]));
+  const states = new Map(); // path -> {c, rows: Map(String(id) -> values), gen}
+  for (const c of collections) {
+    if (controllers.has(c.path)) states.set(c.path, { c, rows: new Map(), gen: 0 });
+  }
+
+  function filterMatch(c, values) {
+    if (!c.filter) return true;
+    const v = values[c.filter.column];
+    return c.filter.items.some(
+      (i) => String(i.kind === "literal" ? i.value : store.get(i.storePath)) === String(v)
+    );
+  }
+
+  async function refetch(state) {
+    const { c } = state;
+    const gen = ++state.gen;
+    const params = c.query
+      ? c.query.args.map((a) => (a.kind === "literal" ? a.value : store.get(a.storePath)))
+      : [];
+    const filterValues = c.filter
+      ? c.filter.items.filter((i) => i.kind === "ref").map((i) => store.get(i.storePath))
+      : [];
+    const resp = await call({ type: "apskel.data.select", path: c.path, params, filterValues });
+    if (gen !== state.gen) return; // superseded mid-flight
+    const ctrl = controllers.get(c.path);
+    if (!resp?.ok) {
+      ctrl.clear();
+      state.rows.clear();
+      log.warn?.(`[apskel] could not load collection ${c.path}:`, resp?.error);
+      return;
+    }
+    ctrl.clear();
+    state.rows.clear();
+    for (const row of resp.rows) {
+      state.rows.set(String(row.id), row);
+      ctrl.instantiate(row.id, row);
+    }
+  }
+
+  // Where does a new row sit under order=? Comparable when the ordered
+  // column arrived with the broadcast; otherwise re-fetch.
+  function positionFor(state, values) {
+    const { c, rows } = state;
+    if (!c.order) return null; // append
+    const col = c.order.column;
+    if (!(col in values)) return undefined; // unknowable -> re-fetch
+    const dir = c.order.dir === "desc" ? -1 : 1;
+    for (const [id, row] of rows) {
+      const cmp = values[col] === row[col] ? 0 : values[col] < row[col] ? -1 : 1;
+      if (cmp * dir < 0) return id; // insert before the first row we outrank
+    }
+    return null;
+  }
+
+  function handleEvent(envelope) {
+    if (!envelope?.type) return;
+    for (const state of states.values()) {
+      const { c } = state;
+      if (c.query) {
+        if (
+          (envelope.type === "apskel.data.changed" ||
+            envelope.type === "apskel.data.inserted" ||
+            envelope.type === "apskel.data.deleted" ||
+            envelope.type === "apskel.data.membersChanged") &&
+          queriesByName.get(c.query.name)?.tables?.includes(envelope.table)
+        ) {
+          refetch(state);
+        }
+        continue;
+      }
+      if (envelope.table !== c.table) continue;
+      const key = String(envelope.id);
+      const ctrl = controllers.get(c.path);
+      if (envelope.type === "apskel.data.inserted") {
+        if (!filterMatch(c, envelope.values ?? {})) continue;
+        const values = { id: envelope.id, ...envelope.values };
+        const before = positionFor(state, values);
+        if (before === undefined) {
+          refetch(state);
+        } else {
+          state.rows.set(key, values);
+          ctrl.instantiate(envelope.id, values, before);
+        }
+      } else if (envelope.type === "apskel.data.deleted") {
+        if (state.rows.has(key)) {
+          state.rows.delete(key);
+          ctrl.destroy(envelope.id);
+        }
+      } else if (envelope.type === "apskel.data.changed") {
+        const row = state.rows.get(key);
+        if (row) {
+          row[envelope.field] = envelope.value;
+          if (c.filter && envelope.field === c.filter.column && !filterMatch(c, row)) {
+            state.rows.delete(key);
+            ctrl.destroy(envelope.id);
+          } else {
+            store.applyServerWrite(`${c.path}[${envelope.id}].${envelope.field}`, envelope.value);
+          }
+        } else if (c.filter && envelope.field === c.filter.column) {
+          // Membership gain: one field is not a whole row — re-fetch.
+          if (filterMatch(c, { [c.filter.column]: envelope.value })) refetch(state);
+        }
+      }
+    }
+  }
+
+  // Dynamic filter references and query parameters re-run the fetch, the
+  // same machinery as a selection change.
+  for (const state of states.values()) {
+    const refPaths = [
+      ...(state.c.filter?.items.filter((i) => i.kind === "ref").map((i) => i.storePath) ?? []),
+      ...(state.c.query?.args.filter((a) => a.kind === "ref").map((a) => a.storePath) ?? []),
+    ];
+    if (refPaths.length) {
+      engine.watch({
+        name: `collection:${state.c.path}`,
+        fields: refPaths,
+        run: () => {
+          refetch(state);
+        },
+      });
+    }
+  }
+
+  const ready = Promise.all([...states.values()].map(refetch));
+  return {
+    handleEvent,
+    refetchAll: () => Promise.all([...states.values()].map(refetch)),
+    ready,
+  };
+}
