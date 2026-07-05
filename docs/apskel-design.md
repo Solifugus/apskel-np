@@ -1792,7 +1792,11 @@ property of the data context per the autosave-vs-explicit resolution, but
 the v0.1 slice contains only draft contexts, so no `save=` attribute ships
 yet — bound fields autosave, exactly the Wire behavior already in place.
 The attribute lands with the explicit-publish workflow immediately after
-the slice, rather than shipping unexercised.
+the slice, rather than shipping unexercised. (Amended, design session 5:
+that promise did not come due — publish turned out to be a status
+transition plus a next-edition insert, not a deferred save, so `save=`
+still has no consumer and stays deferred by this entry's own logic. See
+RESOLVED (publish is a status write).)
 
 ---
 
@@ -1938,7 +1942,9 @@ RESOLVED (`apskel.field.set`): a framework function whose **first argument
 is a write target**, not a read — `action="apskel.field.set(app.selectedTask, .id)"`
 assigns the second argument's value to the first's bound field, origin
 `user`. This is how a list row selects a record without routing and without
-bespoke JS; it may not target `app.identity.*`.
+bespoke JS; it may not target `app.identity.*`. (Extended in design
+session 5 to multi-assignment pairs — see RESOLVED (`apskel.field.set`
+takes pairs).)
 
 RESOLVED (`apskel.nav.go`): the deliberate-navigation counterpart —
 `action="apskel.nav.go("/edit/1")"` applies the matched route's assignments
@@ -2246,6 +2252,125 @@ reference, read at press time like any action argument. Both clear
 nothing and prompt nothing in v0.x; the row appears/disappears through
 the same broadcast path as anyone else's insert or delete.
 
+**Phase 9 (Knowledge Foyer completion) — design session 5.** The audit
+result first: publish, comments, tags, and the landing page compose from
+machinery Phases 7–8 already built. Five entries add the genuinely
+missing pieces; the sixth records the KF v1.0 shape those pieces serve,
+so the app and this doc cannot drift apart.
+
+RESOLVED (publish is a status write): the explicit-publish workflow needs
+no new framework surface. *Publish* is `apskel.field.set` on the
+edition's bound `.status` field — an ordinary guarded write through the
+existing Wire, subject to the same write rule and owner walk as any
+other field. *Start the next edition* is
+`apskel.data.create("article_editions", "article_id", .article_id, ...)`
+— the Phase 8 composer action, copying forward whatever columns the
+action's pairs name. Consequence, stated honestly: the earlier promise
+that `save=` "lands with the explicit-publish workflow" does not come
+due — publish turned out to be a status transition, not a deferred save,
+so `save=` still has no consumer and stays deferred rather than shipping
+unexercised. The original entry is amended in place with a pointer here;
+the promise stays on record.
+
+RESOLVED (published editions are immutable at the schema): "nobody edits
+a published edition, owner included" is a row-state *write* condition —
+the write-side twin of the row-state read problem, but with no query to
+route it through. The v0.x answer: immutability lives in the app's own
+`schema.sql` as a trigger (integrity constraints are the app's SQL,
+exactly like its FKs) — a published row rejects UPDATE and DELETE, and
+publishing itself is an UPDATE on a still-draft row, so the one-way door
+is the trigger's WHEN clause, not framework logic. The framework's whole
+contribution is a courtesy already owed: `apskel.data.set` and
+`apskel.data.delete` catch database rejections and answer a coherent 400
+carrying the database's message, exactly as `apskel.data.insert` already
+does — never a 500, never a crash. Row-state-conditional *write rules*
+as framework grammar are a recorded DECISION-POINT below, not built;
+corrections to published work happen in the next edition, which is the
+Knowledge Foyer's editorial model anyway.
+
+DECISION-POINT (row-state-conditional write rules — recorded, not
+resolved): whether the graph grammar ever grows a way to say "writable
+while draft" directly, or whether schema triggers remain the permanent
+answer for row-state write conditions the way named queries are for
+row-state reads.
+
+RESOLVED (identity-bound query parameters): a "my drafts" query with a
+client-sent user-id parameter is spoofable — any authenticated user
+could pass another's id, and the query's own read rule would happily
+comply. So: a query may declare the reserved parameter **`@user`** in
+its `params=` list; its positional slot is filled server-side from the
+verified token's user id, never from the wire — a call site neither
+passes it nor can (the call-grammar arity check counts only the
+non-`@` params). A query declaring `@user` requires identity regardless
+of its `read=` rule — an anonymous call is 401 — and declaring it in an
+app that never calls `apskel.auth.*` is a load error, XML-knowable per
+the error taxonomy. `@user` is also the only listable form an
+`owner`-read table gets: there is no `owner` query rule because a list
+is not a row, but a `users`-read query WHERE-clamped to `@user` is
+exactly "my rows", unspoofably. No other `@` names exist; any other
+`@`-prefixed param is a load error naming the declaration.
+
+RESOLVED (`apskel.field.set` takes pairs): clicking an article on the
+landing page must set two fields in one action — `app.view` and
+`app.currentEditionId` — and one button has one action. `field.set`
+extends from one (target, value) pair to any number:
+`apskel.field.set(app.view, "article", app.currentEditionId, .id)`.
+Even arity is load-checked; every odd-position argument must be a
+write-target reference (a literal there is a load error naming the
+site); all assignments apply before one cascade settles, origin `user`.
+The state→URL reverse match then makes the URL follow for free —
+multi-assignment is precisely how a row click becomes a deep link
+without a second navigation system. `app.identity.*` stays off-limits
+as a target.
+
+RESOLVED (create actions declare insert targets): Phase 8 allowlisted
+`apskel.data.insert` to collection-bound tables — but a pro/con mark is
+written yet never *listed* raw (its consumers are aggregate queries), so
+`comment_marks` would be insertable nowhere. The principled fix widens
+nothing: the insert allowlist derives from the app's own resolved
+bindings, and a load-resolved `apskel.data.create` action **is** such a
+binding — its string-literal table joins the insert-allowlisted tables
+and its string-literal columns join that table's column allowlist, at
+load, from the XML alone. Startup validation extends to these tables
+exactly as to collection-bound ones: named columns must exist against
+the live schema, ownership stamps resolve from the users-FK
+introspection, and `write="owner"` with no direct users FK is the same
+born-unowned-and-dead startup error. Nothing becomes insertable that the
+app's own XML does not name.
+
+RESOLVED (the KF v1.0 shape): the target the entries above serve.
+
+* Schema: `article_editions` gains `status` (`draft` | `published`,
+  default `draft`) and `published_at`; `comments (id, edition_id FK,
+  created_by FK users, body, created_at)`; `comment_marks (comment_id
+  FK, user_id FK users, kind, PRIMARY KEY (comment_id, user_id))`;
+  `expositions` and `exposition_tag_rules` per the sketch. The
+  immutability trigger on published editions lives here.
+* The read flip, cashing the promise in RESOLVED (the query is the
+  permission boundary): `article_editions` goes `read="owner"` — drafts
+  genuinely private at last — with public reading only through
+  `read="public"` queries: `publishedArticles` for the landing list and
+  the query-sourced record context behind `/article/:id`. The drafts
+  list becomes a `myDrafts` query declaring `@user`. `comments` are
+  `read="public" write="owner"`; `comment_marks` `write="owner"` (the
+  stamp makes the inserter the owner at birth).
+* Comments in the UI are a **flat, filtered collection**
+  (`table="comments" filter=".edition_id: app.currentEditionId"`) — the
+  Phase 8 dynamic filter, not a nested instantiation; nested
+  instantiation stays honestly deferred rather than half-shipping inside
+  this phase. Pro/con tallies come from a query-sourced collection whose
+  `tables=` names `comment_marks`, so a mark broadcast re-fetches the
+  list and the counts move live.
+* Marks are **insert-once** in v0.x: the composite primary key makes a
+  second mark by the same user a database rejection, answered 400 and
+  logged client-side, not prompted. *Changing* a mark needs upsert
+  semantics this doc has not designed — recorded here, not smuggled in.
+* Expositions, concretely (cashing the session-4 promise that they need
+  nothing new): an `/exposition/:id` route; an `expositionArticles`
+  query whose SQL does the has-tag/lacks-tag EXISTS work; and a rules
+  editor that is an ordinary collection over `exposition_tag_rules`
+  with a composer — insertable via the create-action entry above.
+
 ---
 
 # Future Non-Web GUI Renderers
@@ -2509,24 +2634,30 @@ Knowledge Foyer tests the early framework features:
                 Article: {.title}
             </articleList>
 
-            <articleEditor type="text-editor" table="article_editions">
+            <articleEditor type="text-editor" table="article_editions" record="app.currentEditionId">
                 Title: {.title}
                 Body: {.body}
-                Status: {.status: "draft", "published"}
                 Tags: {.tags: tags.id->tags.name}
+                <publish type="button" action='apskel.field.set(.status, "published")'>Publish</publish>
             </articleEditor>
 
-            <feedbackPanel type="layout" table="comments" orient="vertical">
-                Comment: {.body}
-                Kind: {.kind: "pro", "con"}
+            <feedbackPanel type="layout" orient="vertical"
+                           table="comments" filter=".edition_id: app.currentEditionId">
+                <row type="layout" orient="horizontal">
+                    {.body}
+                    <pro type="button" action='apskel.data.create("comment_marks", "comment_id", .id, "kind", "pro")'>pro</pro>
+                    <con type="button" action='apskel.data.create("comment_marks", "comment_id", .id, "kind", "con")'>con</con>
+                </row>
             </feedbackPanel>
 
         </workspace>
 
-        <expositionView type="layout" table="expositions" orient="vertical">
+        <expositionView type="layout" table="expositions" record="app.currentExpositionId" orient="vertical">
             Title: {.title}
             Description: {.description}
-            Articles: {articlesForExposition(.id)}
+            <articles type="layout" source="expositionArticles(app.currentExpositionId)" orient="vertical">
+                {.title}
+            </articles>
         </expositionView>
 
     </client>
@@ -2535,9 +2666,9 @@ Knowledge Foyer tests the early framework features:
         <graph name="knowledge">
             <users>
                 <articles>
-                    <article_editions>
-                        <comments>
-                            <comment_marks/>
+                    <article_editions read="owner" write="owner">
+                        <comments read="public" write="owner">
+                            <comment_marks write="owner"/>
                         </comments>
                     </article_editions>
                     <tags read="public" write="none"/>

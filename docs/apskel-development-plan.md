@@ -362,13 +362,63 @@ non-SELECT, id-less query) fail in the terminal naming the query.
 
 ## Phase 9 — Knowledge Foyer Completion
 
-In order: publish workflow (explicit publish, editions) → public article view
-and routing (needs Phase 7 items 1–3) → comments (insert-only, exercises
-Phase 8) → pro/con marks → tags (needs item 4) → expositions (needs item 5)
-→ landing page with filtered published list. Each feature verified against
-the KF role rules: a logged-out browser profile genuinely cannot see drafts
-or write anything — checked by attempting the forbidden Wire writes directly
-with `curl`, not just by absence of UI.
+Design session 5's entries govern: publish is a status write; published
+editions are immutable at the schema; identity-bound query parameters
+(`@user`); `apskel.field.set` takes pairs; create actions declare insert
+targets; the KF v1.0 shape.
+
+**Framework deliverables (small, by design):** the `@user` query
+parameter (filled server-side from the token, excluded from call-site
+arity, 401 anonymous, load error in a no-auth app, any other `@` name a
+load error); `field.set` pair grammar (even arity load-checked,
+write-target odd slots, all assignments before one cascade); the insert
+allowlist extended to tables and columns named by resolved
+`apskel.data.create` actions, with startup validation (column existence,
+ownership stamps, born-unowned-and-dead) covering them; `apskel.data.set`
+and `.delete` mapping database rejections to a 400 carrying the
+database's message, as insert already does.
+
+**App deliverables (KF v1.0, in order):** publish workflow (status write
++ next-edition composer + immutability trigger in `schema.sql`) → public
+article view and routing (`/article/:id` as query-sourced record
+context; the read flip: `article_editions` `read="owner"`, public
+reading only through `publishedArticles`-style queries) → comments (flat
+filtered collection, insert-only) → pro/con marks (create action,
+insert-once, tallies live via a query whose `tables=` names
+`comment_marks`) → my-drafts list (`myDrafts` declaring `@user`) →
+expositions (`/exposition/:id` route, `expositionArticles` query, rules
+editor as an ordinary collection with a composer) → landing page
+(published list, row click via `field.set` pairs, URL following by
+reverse match).
+
+Fixtures first, expected outcomes in the README before code: load —
+`fail-fieldset-odd-args`, `fail-fieldset-literal-target`,
+`fail-user-param-passed` (a call site supplying a value for `@user`),
+`fail-user-param-noauth` (`@user` declared in a tokenless app),
+`fail-user-param-unknown` (an `@`-name other than `@user`); startup —
+`startup-create-badcolumn` (a create action naming a nonexistent
+column), `startup-create-unowned` (a create-target table with
+`write="owner"` and no direct users FK).
+
+Do NOT build yet: upsert / mark-changing, row-state-conditional write
+rules as graph grammar, nested collection instantiation, row editing
+inside lists, the offline queue, `select`/`rich-text` primitives (all
+Phase 10 or later).
+
+Verification (personally), against the KF role rules — forbidden acts
+attempted directly, not inferred from absent UI: **logged-out browser
+profile** — the landing page lists only published articles; `curl`
+`apskel.data.get` on a draft edition → 401; `apskel.data.select` against
+`myDrafts` → 401; an anonymous comment insert via `curl` → 401.
+**Logged-in non-owner** — reading someone else's draft via `curl` → 403
+naming table and rule; editing a published edition through `poke.js` →
+400 carrying the trigger's message; marking the same comment twice →
+second attempt 400, tally unchanged. **Cross-profile liveness** —
+publish in the owner's tab and watch the logged-out profile's landing
+list gain the article on the broadcast; `psql`: `comment_marks` rows
+carry the token's user id regardless of what the client claimed, and no
+`sessions` table has appeared. Startup fixtures read as errors in the
+terminal, per the standing discipline.
 
 ## Phase 10 — Hardening for the WorkSplicer Era
 
