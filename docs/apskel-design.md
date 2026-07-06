@@ -956,7 +956,10 @@ RESOLVED (origins): every `set` carries an origin — `user`, `server`, or
 `system`. Watcher-body writes default to `system`. The `server` origin is
 reserved to the Wire receive path; the engine rejects any other writer
 claiming it, because echo suppression trusts this origin and must not be
-forgeable by app code.
+forgeable by app code. (Amended, design session 7: a fourth origin,
+`replay`, minted only by the boot overlay path under the same
+enforcement clause — see RESOLVED (the `replay` origin) in the Phase
+10.2 block. Every origin is minted by exactly one gatekeeper.)
 
 RESOLVED (uniform effect timing): every `set` opens a cascade frame, even
 with zero registered watchers; deferred effects enqueued during any frame
@@ -2479,6 +2482,170 @@ query-sourced record context — that is how the Knowledge Foyer reader
 renders a published body — while `edit`/`split` mounts remain inputs
 and stay illegal there, per RESOLVED (named queries are declared,
 read-only sources).
+
+**Phase 10.2 (offline queue, resync, the `detect` prompt) — design
+session 7, in progress.** Question 1 — the queue's durable local shape —
+is closed by the entries below. Question 2 (the flush protocol:
+leadership, replay order, temp-id mechanics, token re-mint mid-flush)
+opens next, and its first item is already named by the recorded debt at
+the end of this block; the keep-mine/take-theirs prompt UI, `sync_log`,
+and the edge-conflict revisit follow. Nothing here is built until the
+session closes, per the standing discipline.
+
+RESOLVED (durable local shape: a replica plus a queue, in wire
+vocabulary): the client persists exactly two structures, with different
+lifetimes.
+
+* **The replica** — the client's copy of last-acknowledged server
+  state, keyed in wire vocabulary, never store paths: bound values as
+  `table:id:field`, edge sets as `table:id:edge`, cached collection and
+  query result sets keyed by source, the revisions map, and
+  `app.identity.*`. Offline boot replays the replica through
+  `applyServerWrite` — the same receive gate a live broadcast uses — so
+  displays repaint, the origin-suppressed wire watchers stay quiet, and
+  revisions are adopted, with zero new machinery. A cached collection
+  result set replays through the same door Phase 8 built for an initial
+  collection fetch: per RESOLVED (resolution vs instantiation), arriving
+  rows are dynamic subtree insertion under the "load time, again,
+  locally" rule, and a replayed set is indistinguishable from a first
+  fetch — there is no special boot path that reimplements instantiation.
+  Column discipline is inherited by construction: the replica stores
+  what `apskel.data.select` returned — id plus template-bound columns,
+  never `*`.
+* **The queue** — pending mutations the server has not yet accepted:
+  wire envelopes plus a monotonic local sequence number.
+
+Local scratch is not persisted, and the reason is a consequence, not a
+policy: everything the user can lose is bound — autosave writes bound
+fields — so replica-plus-queue already covers every durable keystroke.
+`{search}` dying on restart falls out of that.
+
+The two lifetimes are the point. The replica is paired with the cached
+bundle version it was written under: offline you necessarily run the
+cached `app.xml`, so a path-free replica plus that bundle is
+self-consistent. The queue must **outlive** the bundle version, because
+RESOLVED (resync order: components before data) replays queued writes
+against the *current* component version. Wire-vocabulary entries keyed
+by table/id/field survive an app update; the server re-validates each
+envelope's `path` against its current allowlist at flush, so a write
+whose binding no longer exists dies loudly as a 400 at flush time — the
+migration-vs-backlog collision defused as designed, never silently
+dropped.
+
+RESOLVED (medium: IndexedDB, one database per app and identity):
+localStorage keeps what it already holds — the device credential — and
+nothing else. The replica and queue live in IndexedDB: the raw API is
+verbose but vanilla (no dependency), writes are async so they cannot sit
+inside the synchronous cascade, there is no serialize-the-world blob
+ceiling, and per-key puts mean persisting one field write does not
+rewrite the store. One database per `apskel:<app>:<identity>` —
+`user_devices` is deliberately many-to-many, so a shared device must not
+leak one user's replica or pending edits into another's boot. Three
+object stores: `replica`, `queue`, `meta` (the cached bundle version).
+Persistence is a deferred-effect consumer at settle, coalesced per
+field: the disk sits where the Wire sits — after the cascade, never
+inside it. The loss window is therefore the settle window plus the async
+IndexedDB commit, and that is the **same stance RESOLVED (the Wire sits
+after the cascade) took for the network**: a crash inside the window
+loses exactly the keystrokes the Wire would have lost. Recorded so a
+later pass does not "fix" it with synchronous writes inside the cascade
+— that fix would be a regression.
+
+RESOLVED (queue coalescing; the pinned baseRevision): a queue entry is
+`{seq, envelope}` and nothing else — deliberately no wall-clock
+timestamp, because authoritative ordering is the server's receipt order
+and a stored timestamp is a standing temptation to violate that.
+Coalescing:
+
+* `set` coalesces per `table:id:field`, last value wins — but the entry
+  keeps the baseRevision of the **first** queued write: the revision the
+  user last actually saw from the server. This is the load-bearing
+  sentence: pinning the *last* baseRevision would silently convert
+  `detect` into `lww`, re-basing each coalesced write onto a revision
+  the user never saw.
+* `setMembers` coalesces per `table:id:edge`, whole-set replace, no
+  baseRevision — restating the recorded lww-at-set-level deferral, not
+  re-deciding it (this session's edge question may revisit).
+* `insert` and `delete` never coalesce; global seq order is preserved —
+  an insert flushes before sets on its row, a delete after them.
+
+Decided non-behavior: a queued `delete` does **not** prune earlier
+queued `set`s on the same row. Order is preserved; the sets flush first,
+harmlessly; anything genuinely inconsistent dies loudly as a server 400
+at flush. Silent pruning is an optimization that fights the dies-loudly
+rule.
+
+A `set` entry's `id` slot may hold a temp id referencing an earlier
+queued `insert`; that admission is the queue shape's entire contribution
+to temp ids — format, rewrite-on-flush, and instance-path remapping
+belong to the flush protocol (question 2), pre-decided by nothing here.
+
+RESOLVED (`conflict=` is the queueing gate): whether an offline edit
+queues at all is decided by the context's existing conflict policy — no
+new axis. `offline-readonly` refuses the edit at enqueue time, surfacing
+per the autosave-403 pattern (console warning, no retry) — honoring
+"edits need a connection." `detect` and `lww` queue; the policy is
+applied at enqueue (a `detect` entry carries its pinned baseRevision, an
+`lww` entry carries none) and the queue itself stays policy-blind.
+Anonymous queueing falls out of the same gate: a context whose rules
+permit anonymous writes queues offline exactly as it writes online;
+every other context refuses. What an anonymous queue may never do is the
+next entry.
+
+RESOLVED (the anon boundary: never merge, never reattribute): databases
+never merge across identities. Login switches databases; logout
+likewise. Anon queue entries never flush under an authenticated identity
+— the write was made by nobody, and stamping it with whoever logs in
+next would make attribution a lie (ownership at birth stamps the owner
+from the token; a reattributed queue entry would launder anonymous work
+into owned rows). This rule is explicit, not implied by the per-identity
+namespacing: the namespacing makes the merge inconvenient; this entry
+makes it forbidden.
+
+RESOLVED (the `replay` origin — amendment to RESOLVED (origins)): the
+replica is last-acknowledged server state, but the queue holds the
+user's pending edits — replayed alone, the app boots showing the old
+value of every field edited offline: the edit exists in the queue but
+not on screen, which reads as data loss and invites a re-edit that
+double-queues. Boot must therefore be replica replay **then queue
+overlay into the store**. The trap is the door: the `server` origin
+repaints without re-enqueueing — mechanically perfect — but RESOLVED
+(origins) makes `server` a *trust rule*, reserved to the receive path
+and unforgeable, and queued values are precisely **not**
+server-acknowledged. Smuggling them through `server` would make the
+origin taxonomy a lie at the exact moment — conflict resolution — it
+must be trustworthy. Resolution: a fourth origin, `replay` — it
+suppresses the wire watchers exactly as `server` does, is
+distinguishable from it, and is minted only by the boot overlay path the
+way `server` is minted only by the receive path; the engine rejects
+`replay` from any other minter, same enforcement clause as `server`. The
+symmetry is the rule: **every origin is minted by exactly one gatekeeper
+— `user` by `ctx.input`, `server` by the receive path, `replay` by boot,
+`system` by everything else.**
+
+Boot ordering, composed with RESOLVED (resync order: components before
+data) and stated once, here: instantiate, bind, replica through the
+receive gate (`applyServerWrite` — honest, because the replica holds
+only server-acknowledged values by construction), queue overlay through
+`replay`, then connect and begin resync — component/app updates first,
+then pull server changes, then reconcile (conflicts prompted before
+push) and flush. Verified against the resync entry: the composition
+holds *because of* the two-lifetimes decision — if reconnect delivers a
+new bundle, components update first, which re-instantiates and re-runs
+the boot replay under the new bundle; that rerun is possible precisely
+because replica and queue are wire vocabulary, not paths, and any queue
+entry whose binding the new bundle no longer declares dies loudly at
+flush.
+
+RECORDED DEBT (multi-tab flush leadership — question 2 opens here): two
+tabs share one per-identity database. Sequence allocation is mechanical
+(IndexedDB autoincrement), but flush is not: two tabs reconnecting and
+both replaying the queue lands every insert twice — `set` is
+near-idempotent under revisions, `insert` is not. The storage shape
+approved above is what creates the problem, so the flush protocol
+(question 2) opens with flush leadership — Web Locks or equivalent — as
+a first-class item, alongside replay order, temp-id mechanics, and token
+re-mint mid-flush.
 
 ---
 
