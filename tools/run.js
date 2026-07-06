@@ -24,6 +24,7 @@ import {
   collectUsesAuth,
   collectPermissions,
   collectSetFields,
+  collectSelectOptions,
   collectQueries,
   collectCollections,
   collectQueryBound,
@@ -34,6 +35,7 @@ import {
   attachWire,
   resolvePermissionColumns,
   resolveSetFieldEdges,
+  resolveSelectOptions,
   resolveQueries,
   resolveCollections,
 } from "../server/wireServer.js";
@@ -59,6 +61,7 @@ let bound;
 let usesAuth;
 let permissions;
 let setFields;
+let selectOptions;
 let collections;
 let queryBound;
 let serverQueries;
@@ -69,6 +72,7 @@ try {
   usesAuth = collectUsesAuth(root);
   permissions = collectPermissions(root);
   setFields = collectSetFields(root);
+  selectOptions = collectSelectOptions(root);
   collections = collectCollections(root);
   queryBound = collectQueryBound(root);
   insertTargets = collectInsertTargets(root);
@@ -150,6 +154,7 @@ let insertStamps;
 try {
   await resolvePermissionColumns(db, permissions);
   await resolveSetFieldEdges(db, setFields, root.data.nodes);
+  await resolveSelectOptions(db, selectOptions);
   await resolveQueries(db, serverQueries, { appDir, collections, queryBound });
   insertStamps = await resolveCollections(db, { collections, permissions, insertTargets });
 } catch (e) {
@@ -194,6 +199,7 @@ attachWire(app, {
   auth,
   permissions,
   setFields,
+  selectOptions,
   collections,
   queries: serverQueries,
   queryBound,

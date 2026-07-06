@@ -51,6 +51,7 @@ export function attachWire(
     queryBound = [],
     insertStamps = new Map(),
     insertTargets = [],
+    selectOptions = [],
   }
 ) {
   const allowlist = new Map(bound.map((b) => [`${b.table}.${b.field}`, b]));
@@ -78,11 +79,16 @@ export function attachWire(
     insertColumns.set(t.table, cols);
   }
   // Set fields by parent:edge, per RESOLVED (membership writes are
-  // whole-set replaces); their options descriptors form the options
-  // allowlist — arbitrary column pairs never reach SQL.
+  // whole-set replaces); their options descriptors — unioned with the
+  // select-declared arrow sources, per RESOLVED (a select is a domain-
+  // bearing column reference) — form the options allowlist: arbitrary
+  // column pairs never reach SQL.
   const setByKey = new Map(setFields.map((s) => [`${s.table}:${s.edge}`, s]));
   const optionsAllow = new Map(
-    setFields.map((s) => [`${s.options.table}:${s.options.value}:${s.options.label}`, s.options])
+    [...setFields, ...selectOptions].map((s) => [
+      `${s.options.table}:${s.options.value}:${s.options.label}`,
+      s.options,
+    ])
   );
   const sseClients = new Set(); // {res, userId}
 
@@ -913,6 +919,28 @@ async function resolveOneEdge(db, s, dataNodes) {
     childColumn: childFks[0].col,
     memberType,
   };
+}
+
+// Startup probe of every select-declared arrow options source, per
+// RESOLVED (a select is a domain-bearing column reference): the table
+// and both columns must exist against the live schema — a LIMIT-0
+// SELECT, failing with an error naming the site, exactly like queries.
+// (Edge-declared options are proven by the join introspection instead.)
+export async function resolveSelectOptions(db, selectOptions) {
+  for (const s of selectOptions) {
+    const { table, value, label } = s.options;
+    try {
+      await db.query(
+        `SELECT ${quoteIdent(value)}, ${quoteIdent(label)} FROM ${quoteIdent(table)} LIMIT 0`
+      );
+    } catch (e) {
+      throw new Error(
+        `select options source ${table}.${value}->${table}.${label} ` +
+          `(${s.site.file}:${s.site.line}, ${s.site.ref}) does not run against the ` +
+          `live schema: ${e.message}`
+      );
+    }
+  }
 }
 
 // Startup resolution of declared queries, per RESOLVED (named queries are

@@ -1,0 +1,11 @@
+<app title="Rich Text With An Unknown Mode" version="0.1">
+
+    <client>
+
+        {draft = ""}
+
+        <body type="rich-text" mode="wysiwyg" field="draft"/>
+
+    </client>
+
+</app>

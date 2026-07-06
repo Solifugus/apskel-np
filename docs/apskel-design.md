@@ -1064,9 +1064,24 @@ built — the MCP surface is an adapter over the existing Wire. This gives any
 MCP-capable model access to both the frontend and the backend through one
 well-known door, with zero bespoke glue.
 
-DECISION-POINT: Decide whether the MCP façade ships in v0.1 or is deferred. If
-deferred, the only firm rule for v0.1 is: do not name the internal Wire "MCP,"
-so the MCP namespace stays free for the façade later.
+RESOLVED (the MCP façade is deferred to the WorkSplicer era) — design
+session 6, closing the DECISION-POINT that stood here: v0.1 shipped
+without the façade, and nothing on the roadmap before WorkSplicer has an
+LLM agent to drive an app. A façade with no consumer cannot pass the
+standing verification discipline — there would be nothing to verify
+personally, only an implementation summary's claim that the adapter
+adapts. So the façade lands inside WorkSplicer's own plan, next to its
+first real consumer. Three rules hold in the meantime, so the deferral
+stays cheap:
+
+1. The internal bus keeps not being named "MCP" — the namespace stays
+   free, as it has since Phase 4.
+2. Every Wire message keeps the 1:1-tool-translatable shape: typed
+   envelope in, plain result out, no client-only semantics smuggled into
+   the protocol. The Wire's message vocabulary (`apskel.data.*`,
+   `apskel.field.set`, `apskel.auth.*`, ...) IS the future tool list.
+3. A proposed Wire message that would not make sense as an MCP tool is a
+   design smell to catch at review time, not at façade-building time.
 
 ---
 
@@ -2395,6 +2410,76 @@ RESOLVED (the KF v1.0 shape): the target the entries above serve.
   editor that is an ordinary collection over `exposition_tag_rules`
   with a composer — insertable via the create-action entry above.
 
+**Phase 10.1 (primitive-set completion) — design session 6.** Phase 10's
+opening slice: the two primitives the v0.1 set has owed since the set
+was declared — `select` and `rich-text` — plus the DECISION-POINTs that
+gated them, each resolved in place at its own section (the rich-text
+representation under the GUI Compatibility Principle; the MCP façade's
+ship-or-defer under the MCP surface section). The offline queue and the
+`detect` prompting UI remain design session 7; nothing here touches
+them.
+
+RESOLVED (a select is a domain-bearing column reference): `select` is
+the single-value counterpart of `multi-select`, and its option list
+comes from where every option list comes from — the domain on its field
+reference, never a bespoke attribute. Two domain forms, closed:
+
+* **Literal domain** — `field="ruleKind: has, lacks"` on a local, or
+  `field=".status: draft, published"` on a bound column: the value list
+  is load-knowable, so the options bake into the bundle as static
+  (value, label) pairs — no fetch, no allowlist entry, works in
+  tokenless and even serverless (Phase 3 static) apps. Literal parsing
+  follows the domain grammar everywhere else: bare words are strings;
+  quoted strings, numbers, and booleans parse as themselves; the label
+  is the value's string form.
+* **Table-item domain** — `field=".tag_id: tags.id->tags.name"` on a
+  bound column, and equally legal on a local
+  (`field="ruleTag: tags.id->tags.name"` — a composer picks a row, a
+  create action reads the picked key): the arrow item creates a
+  load-time options-allowlist entry, and the option list is runtime
+  state at the widget's own `<path>.options` — fetched through
+  `apskel.data.options`, delivered via applyServerWrite, refetched on
+  login and on the enclosing selection change; RESOLVED (options are
+  runtime state at the widget's own path) verbatim, now with two
+  consumers. The stored value is the arrow's left column: single,
+  scalar, exactly what `apskel.data.set` or a create action already
+  carries.
+
+Validation, all load errors naming the site: a `select` whose field
+carries no domain (a select with nothing to list is meaningless); a
+mixed literal-plus-arrow domain (the widget-inference sketch's "combo
+input" — deferred, not half-shipped); more than one arrow item; an
+arrow whose two sides name different tables; and a `select` whose field
+resolves to a graph **edge** — an edge is multi-valued by declaration
+and `multi-select` is its widget; the error says so. Startup checks,
+per the error taxonomy: an arrow domain's table and columns must exist
+against the live schema — a LIMIT-0 probe naming the site on failure,
+exactly like queries. The options *read* door is unchanged: the options
+table's own read rule governs, 401/403/empty-plus-warning exactly as
+for multi-select. Widget inference stays unimplemented: `type=` remains
+explicit everywhere, and the inference table remains a sketch.
+
+RESOLVED (rich-text primitive; mode is load-checked): one primitive,
+one field, and a closed `mode=` menu — `edit` (the default): a source
+textarea, a write-through valve exactly like `text-area`; `view`: the
+rendered content nodes, read-only; `split`: both, the preview
+repainting per keystroke through the ordinary store loop (input →
+store → write push) — no second data path, and the loop's synchronous
+cascade is what makes the preview live. The value is the markup source
+string in every mode: the edit surface edits the source itself, so
+round-tripping is exact by construction and the same-value guard, echo
+suppression, and conflict machinery hold without caveats. (A WYSIWYG
+surface regenerating markup from the DOM could not promise that;
+toolbars and WYSIWYG are recorded as deferred, not designed.) An
+unknown mode is a load error naming the site, and the menu lives in
+the primitive's manifest — the loader enforces it; primitives stay
+stateless and validate nothing. Mode also settles inputness at load: a
+`view` mount is a display, not an input, so it is legal under a
+query-sourced record context — that is how the Knowledge Foyer reader
+renders a published body — while `edit`/`split` mounts remain inputs
+and stay illegal there, per RESOLVED (named queries are declared,
+read-only sources).
+
 ---
 
 # Future Non-Web GUI Renderers
@@ -2499,9 +2584,39 @@ final DOM structure
 
 The web renderer can translate components into DOM elements, but future renderers should be able to translate the same component tree into other interface systems.
 
-DECISION-POINT: Decide how much HTML-like content should be allowed inside app XML if long-term GUI portability matters.
+RESOLVED (rich text is stored markup, rendered to content nodes, never
+HTML) — design session 6, closing the two DECISION-POINTs that stood
+here. A rich-text field's stored value is a **plain string of
+lightweight markup** — a closed, tight subset of familiar markdown:
+paragraphs separated by blank lines; `#`/`##`/`###` headings (a heading
+is a block of its own); `- ` unordered and `1. ` ordered list lines;
+`> ` quote lines; and inline `**bold**`, `*italic*`, `` `code` ``,
+`[text](url)`. The renderer parses that string into **renderer-neutral
+content nodes** (a small tree of heading/paragraph/list/quote/text/
+bold/italic/code/link/break nodes — `runtime/markup.js`, dependency-
+free) and each renderer realizes those nodes natively: the web
+primitive via `createElement`/`createTextNode`, a future TUI however it
+likes. What this buys, in order of importance:
 
-DECISION-POINT: Decide whether rich text/static markup should be represented as raw HTML, markdown, or renderer-neutral content nodes.
+* **The pipeline below the widget does not know rich text exists.** The
+  stored value is a string, so store equality, autosave, revision
+  bookkeeping, conflict detection, echo suppression, and every Wire
+  message treat a rich-text field exactly as a text field — nothing
+  grows a special case.
+* **Raw HTML never exists as data.** The parser has no HTML
+  pass-through (`<` is an ordinary character), the web realizer never
+  touches `innerHTML`, and link hrefs pass a scheme allowlist (http,
+  https, mailto, and scheme-less relative paths) — a `javascript:` link
+  renders as plain text. Injection is impossible by construction, with
+  zero sanitizer dependencies.
+* **This principle's own question answers itself**: app XML carries no
+  HTML-like content. Structure is components; rich content is field
+  *values*; and the content-node tree is a rendering artifact that is
+  never stored and never crosses the Wire.
+
+Everything outside the subset is literal text — no extension points, no
+raw blocks, no escape hatch. Growing the subset is a design-doc change,
+not a parser patch.
 
 ---
 

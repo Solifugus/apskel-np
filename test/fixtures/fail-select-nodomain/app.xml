@@ -1,0 +1,11 @@
+<app title="Select With Nothing To List" version="0.1">
+
+    <client>
+
+        {choice = ""}
+
+        <pick type="select" field="choice"/>
+
+    </client>
+
+</app>

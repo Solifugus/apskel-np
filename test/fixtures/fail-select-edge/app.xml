@@ -1,0 +1,21 @@
+<app title="Select On A Graph Edge" version="0.1">
+
+    <client>
+
+        <editor type="layout" orient="vertical" table="articles" record="1">
+            <tagPick type="select" field=".tags: tags.id->tags.name"/>
+        </editor>
+
+    </client>
+
+    <data>
+        <graph name="knowledge">
+            <users>
+                <articles read="public" write="owner">
+                    <tags read="public" write="none"/>
+                </articles>
+            </users>
+        </graph>
+    </data>
+
+</app>

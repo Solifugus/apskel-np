@@ -1,0 +1,32 @@
+/* rich-text — structural only: the split layout's mechanics and the
+   reset on the rendered surface. Appearance stays in the app theme. */
+
+.apskel-rich-text-split {
+  display: flex;
+  flex-direction: row;
+  gap: 0.5em;
+  align-items: stretch;
+}
+
+.apskel-rich-text-split > .apskel-rich-text-source,
+.apskel-rich-text-split > .apskel-rich-text-view {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.apskel-rich-text-source {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.apskel-rich-text-view {
+  overflow-wrap: break-word;
+}
+
+.apskel-rich-text-view > :first-child {
+  margin-top: 0;
+}
+
+.apskel-rich-text-view > :last-child {
+  margin-bottom: 0;
+}

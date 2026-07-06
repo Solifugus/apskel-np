@@ -61,7 +61,7 @@
 
         <reader type="layout" orient="vertical" visible="app.view: article" source="publishedEdition" record="app.currentEditionId">
             Title: {.title}
-            {.body}
+            <bodyView type="rich-text" mode="view" field=".body"/>
             Published: {.published_at}
         </reader>
         <feedback type="layout" orient="vertical" visible="app.view: article" table="comments" filter=".edition_id: app.currentEditionId" order=".id asc" limit="50">
@@ -101,8 +101,8 @@
             </row>
         </ruleList>
         <ruleBar type="layout" orient="horizontal" visible="app.view: exposition">
-            <ruleTagInput type="text-input" field="ruleTag" placeholder="tag id (1-4)"/>
-            <ruleKindInput type="text-input" field="ruleKind" placeholder="has or lacks"/>
+            <ruleTagInput type="select" field="ruleTag: tags.id->tags.name" placeholder="pick a tag"/>
+            <ruleKindInput type="select" field="ruleKind: has, lacks"/>
             <addRule type="button" action='apskel.data.create("exposition_tag_rules", "exposition_id", app.currentExpositionId, "tag_id", ruleTag, "rule", ruleKind)'>Add rule</addRule>
         </ruleBar>
         <expoNav type="layout" orient="horizontal" visible="app.view: exposition">

@@ -209,6 +209,64 @@ function resolveSite(site, root) {
       fail(site, `may not target the reserved identity region '${p}'`);
     }
   }
+  // A select's option list IS its field's domain, per RESOLVED (a
+  // select is a domain-bearing column reference).
+  if (site.optionsFromDomain) resolveSelectDomain(site);
+}
+
+// The select domain's two closed forms: all literals (static options,
+// baked into the bundle) or exactly one table.key->table.label item (an
+// apskel.data.options source). An edge is multi-valued by declaration
+// and belongs to multi-select; mixed and multi-arrow domains are the
+// deferred "combo input", not half-shipped here.
+const SELECT_ARROW = /^([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)->([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)$/;
+const SELECT_BARE_WORD = /^[A-Za-z_][A-Za-z0-9_-]*$/;
+
+function resolveSelectDomain(site) {
+  if (site.binding?.kind === "edge") {
+    fail(
+      site,
+      `a select's field resolves to the graph edge '${site.binding.table}->` +
+        `${site.binding.edge}' — an edge is multi-valued by declaration, and ` +
+        `multi-select is its widget`
+    );
+  }
+  if (site.domain === null || site.domain === undefined || site.domain === "") {
+    fail(
+      site,
+      `a select's field needs a domain — the domain IS the option list ` +
+        `(field="name: a, b" or field="name: table.key->table.label")`
+    );
+  }
+  const items = splitArgs(site.domain);
+  if (items.some((i) => SELECT_ARROW.test(i))) {
+    if (items.length > 1) {
+      fail(
+        site,
+        `a select's domain is either all literals or ONE table.key->table.label ` +
+          `item — mixed and multi-arrow domains are deferred, per RESOLVED (a ` +
+          `select is a domain-bearing column reference)`
+      );
+    }
+    const [, table, value, labelTable, label] = items[0].match(SELECT_ARROW);
+    if (table !== labelTable) {
+      fail(site, `the arrow's two sides must name the same table — got '${items[0]}'`);
+    }
+    site.optionsSource = { table, value, label };
+    return;
+  }
+  site.staticOptions = items.map((item) => {
+    if (LITERAL.test(item)) {
+      const parsed = JSON.parse(item);
+      return { value: parsed, label: String(parsed) };
+    }
+    if (SELECT_BARE_WORD.test(item)) return { value: item, label: item };
+    fail(
+      site,
+      `select domain item '${item}' — items are literals or one ` +
+        `table.key->table.label item`
+    );
+  });
 }
 
 // A domain follows the first ':' outside quotes: {.status: "draft", "published"}

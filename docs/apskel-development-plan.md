@@ -429,11 +429,81 @@ terminal, per the standing discipline.
 
 ## Phase 10 — Hardening for the WorkSplicer Era
 
-Offline queue + resync order (components before data) + `detect` prompting UI;
-`select` and `rich-text` primitives to complete the v0.1 primitive set; the
-MCP façade decision (the namespace has stayed clean; now decide); dynamic
-component loading / registry groundwork (asset types as composites + registry
-rows). Only then does WorkSplicer's own plan get written.
+Subdivided like Phase 7; each sub-phase keeps the standing discipline
+(fixtures before code, personal verification, regressions block). The
+MCP façade decision came due here and is RESOLVED (design session 6):
+deferred to the WorkSplicer era, where its first real consumer lives —
+the namespace stays clean and every Wire message stays 1:1
+tool-translatable in the meantime.
+
+## Phase 10.1 — Primitive-Set Completion: select and rich-text
+
+Implements design session 6 — RESOLVED (a select is a domain-bearing
+column reference), RESOLVED (rich text is stored markup, rendered to
+content nodes, never HTML), RESOLVED (rich-text primitive; mode is
+load-checked). Deliverables:
+
+* `runtime/markup.js`: the markup subset parsed to renderer-neutral
+  content nodes; no dependencies; scheme allowlist on links; no HTML
+  pass-through.
+* `select` primitive (native select element, structural CSS only):
+  literal domains become bundle-baked static options; a single arrow
+  item becomes an `apskel.data.options` source at the widget's own
+  `<path>.options`. Load errors: domainless select, mixed or multi-arrow
+  domains, mismatched arrow tables, select on a graph edge. Startup:
+  LIMIT-0 probe of arrow tables/columns naming the site.
+* `rich-text` primitive: `mode="edit|view|split"` from the manifest's
+  closed menu, default `edit`; value is the markup source in every
+  mode; `view` mounts are displays (legal under query-sourced record
+  contexts), `edit`/`split` are inputs.
+* Framework seams touched: loader (manifest mode menu, load-time
+  inputness), resolver (select domain validation), serializer (static
+  options, options descriptors on nodes), binder (static option
+  seeding), boot (arrow-select option fetch beside the edge-widget
+  fetch), wireServer (options allowlist union, startup probe).
+* App integration: the `text-editor` composite's body becomes
+  `rich-text mode="split"`; the Knowledge Foyer reader renders `.body`
+  through a `view`-mode rich-text; the KF exposition rule composer
+  swaps its type-a-tag-id text inputs for the two select forms.
+
+Fixtures first, expected outcomes in the README before code: load —
+`select-widget` (the good shapes, serialization asserted),
+`fail-select-nodomain`, `fail-select-mixed`, `fail-select-edge`,
+`fail-richtext-mode`; startup — `startup-select-badcolumn` (an arrow
+domain naming a nonexistent column, run against real PostgreSQL).
+
+Do NOT build yet: WYSIWYG/toolbars, mixed (combo) domains, option
+filtering, widget inference, the `date-picker` composite, anything
+offline-queue.
+
+Verification (personally): in the KF exposition view, the rule composer
+picks a tag **by name** and `psql` shows the row carrying the tag's
+integer id; a published article's body renders headings/bold/lists
+formatted in a logged-out profile, and a `<script>` or `javascript:`
+link typed into a draft arrives as inert plain text; two tabs on the
+same draft — typing markup in one repaints the other's split preview
+within one broadcast with no echo cascade (`__apskel.fireCounts()`);
+`curl` `apskel.data.options` with a column pair the XML never declared
+→ 400; the startup fixture fails in the terminal naming the site;
+devtools confirms both new primitives hold nothing — value and options
+live at store paths.
+
+## Phase 10.2 — Offline Queue, Resync, and the detect Prompt
+
+Design session 7 first: the queue's durable local shape, the flush
+protocol, and the keep-mine/take-theirs prompt UI — the session the
+set-field lww deferral and the `sync_log` note both point at. Resync
+order is already RESOLVED (components before data): apply component/app
+updates, pull server changes, reconcile and flush the local queue —
+conflicts prompted before push. `detect` graduates from log-only to the
+prompt; the server-side `sync_log` lands here, not before.
+
+## Phase 10.3 — WorkSplicer Groundwork
+
+Dynamic component loading / registry groundwork (asset types as
+composites + registry rows) — undesigned, WorkSplicer-shaped, and the
+MCP façade rides along per the session-6 deferral. Only then does
+WorkSplicer's own plan get written.
 
 ---
 

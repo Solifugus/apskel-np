@@ -1,0 +1,7 @@
+{
+  "type": "rich-text",
+  "attributes": ["field", "mode", "rows", "placeholder"],
+  "input": true,
+  "modes": ["edit", "view", "split"],
+  "readonlyModes": ["view"]
+}

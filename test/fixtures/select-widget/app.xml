@@ -1,0 +1,31 @@
+<app title="Select Widget" version="0.1">
+
+    <client>
+
+        {kind = "has"}
+        {size = ""}
+        {ruleTag = ""}
+
+        <panel type="layout" orient="vertical">
+            <kindPick type="select" field="kind: has, lacks"/>
+            <sizePick type="select" field="size: 1, 2, 3"/>
+            <tagPick type="select" field="ruleTag: tags.id->tags.name"/>
+        </panel>
+
+        <editorBox type="layout" orient="vertical" table="articles" record="1">
+            <statusPick type="select" field=".status: draft, published"/>
+            <viewer type="rich-text" mode="view" field=".body"/>
+            <editor type="rich-text" field=".body"/>
+        </editorBox>
+
+    </client>
+
+    <data>
+        <graph name="g">
+            <users>
+                <articles read="public" write="owner"/>
+            </users>
+        </graph>
+    </data>
+
+</app>

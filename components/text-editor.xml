@@ -4,7 +4,7 @@
         Title:
         <titleInput type="text-input" field=".title" placeholder="article title"/>
         Body:
-        <bodyInput type="text-area" field=".body" rows="10" placeholder="draft here — it autosaves"/>
+        <bodyInput type="rich-text" mode="split" field=".body" rows="10" placeholder="draft here — it autosaves (markup: # heading, **bold**, *italic*, `code`, [link](url), - list)"/>
     </editorBox>
 
 </component>

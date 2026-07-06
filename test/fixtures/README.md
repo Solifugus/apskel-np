@@ -800,3 +800,91 @@ terminal. Cleanup after verifying:
   referenced parent row must already belong to the caller — the owner
   inserts a next edition into their own article (200), anyone else or a
   missing parent gets 403.
+
+## Phase 10.1 fixtures (design session 6: primitive-set completion)
+
+Harness: `node test/prim.test.js` (DB-free). Governing entries: RESOLVED
+(a select is a domain-bearing column reference), RESOLVED (rich text is
+stored markup, rendered to content nodes, never HTML), RESOLVED
+(rich-text primitive; mode is load-checked).
+
+### select-widget/ — must load successfully
+
+Four mounts covering the good shapes:
+
+* `kindPick type="select" field="kind: has, lacks"` — literal domain on
+  a local: serialization bakes `staticOptions`
+  `[{value:"has",label:"has"},{value:"lacks",label:"lacks"}]` onto the
+  node, `optionsPath` is the node's own `<path>.options`, and no
+  options-allowlist entry exists (nothing to fetch).
+* `sizePick type="select" field="size: 1, 2, 3"` — number literals parse
+  as numbers (`value` 1, `label` "1").
+* `tagPick type="select" field="ruleTag: tags.id->tags.name"` — arrow
+  domain on a local: no staticOptions; the node carries the options
+  descriptor `{table:"tags", value:"id", label:"name"}` and
+  `optionsPath`; `collectSelectOptions` yields exactly one allowlist
+  entry naming the site.
+* `statusPick type="select" field=".status: draft, published"` — literal
+  domain on a bound column of a `table="articles" record="1"` context;
+  the field binding is an ordinary bound binding (the domain feeds the
+  widget, not the wire).
+* A `viewer type="rich-text" mode="view" field=".body"` mount under the
+  same context, plus a bare `editor type="rich-text" field=".body"`
+  (defaulted mode `edit`) — both load; the view mount's field site is
+  not an input.
+
+### fail-select-nodomain/ — must fail at load
+
+`<pick type="select" field="choice"/>` on a declared local with no
+domain — a select with nothing to list is meaningless. Load error
+naming the site: a select's field needs a domain — the domain IS the
+option list.
+
+### fail-select-mixed/ — must fail at load
+
+`field="ruleTag: tags.id->tags.name, extra"` — an arrow item mixed with
+a literal (the deferred "combo input"). Load error naming the site.
+
+### fail-select-edge/ — must fail at load
+
+A select whose field names a declared graph child of its context's
+table (`field=".tags: tags.id->tags.name"` under `table="articles"`
+with `tags` a graph child) — the reference classifies as an edge, an
+edge is multi-valued, and `multi-select` is its widget. Load error
+naming the site and saying "multi-select".
+
+### fail-richtext-mode/ — must fail at load
+
+`<body type="rich-text" mode="wysiwyg" field="draft"/>` — the mode menu
+is closed (`edit`, `view`, `split`, from the manifest). Load error
+naming the instance and the menu.
+
+### Startup fixture — schema variant, verified the 7.2 way
+
+Run `node tools/run.js test/fixtures/startup-select-badcolumn` and read
+the error in the terminal. Cleanup: `DROP TABLE IF EXISTS sb_tags CASCADE;`
+
+* `startup-select-badcolumn/` — an arrow domain
+  `sb_tags.id->sb_tags.namee` where the live table has `name` — the
+  LIMIT-0 probe fails at startup naming the site and the database's
+  complaint. (Columns are only startup-knowable, per the error
+  taxonomy.)
+
+### Node-testable behavior (prim.test.js, no DOM, fake db)
+
+* `parseMarkup`: blank-line paragraphs; single-line `#`/`##`/`###`
+  headings (a heading inside a longer block stays literal text);
+  `- `/`1. ` list blocks; `> ` quotes; inline bold/italic/code/link
+  nesting (bold containing italic); `<script>` and any other HTML as
+  literal text nodes; `javascript:` links degraded to plain text while
+  http/https/mailto/relative hrefs survive; single newlines inside a
+  paragraph become break nodes; null/empty parse to `[]`.
+* Serialization: the shapes asserted under `select-widget/` above.
+* Wire (fake db): `apskel.data.options` succeeds for the select-declared
+  descriptor and answers 400 for a column pair no widget declared —
+  the allowlist is the union of edge descriptors and select
+  descriptors, nothing wider.
+* Knowledge Foyer: loads with the rule composer's two selects and the
+  reader's view-mode rich-text; `collectSelectOptions` names the
+  `tags.id->tags.name` source; the reader body site is not an input
+  under its query-sourced context.

@@ -1,0 +1,11 @@
+<app title="Select With A Mixed Domain" version="0.1">
+
+    <client>
+
+        {ruleTag = ""}
+
+        <pick type="select" field="ruleTag: tags.id->tags.name, extra"/>
+
+    </client>
+
+</app>

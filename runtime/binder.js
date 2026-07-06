@@ -83,6 +83,12 @@ export function mountApp(root, { store, engine, document, primitives, rootEl, fu
         // field is re-pushed after every options write so the primitive
         // can stay stateless: rebuild the inputs, then re-check them from
         // the store's value — never from anything the primitive kept.
+        // A literal domain's options are bundle-baked: seeded silently at
+        // first mount (collection instances included), no fetch, per
+        // RESOLVED (a select is a domain-bearing column reference).
+        if (node.staticOptions && store.get(node.optionsPath) === undefined) {
+          store.seed(node.optionsPath, node.staticOptions);
+        }
         module.write(ctx, "options", store.get(node.optionsPath));
         if (node.fieldPath) module.write(ctx, "field", store.get(node.fieldPath));
         engine.watch({

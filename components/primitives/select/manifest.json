@@ -1,0 +1,6 @@
+{
+  "type": "select",
+  "attributes": ["field", "placeholder"],
+  "input": true,
+  "optionsFrom": "domain"
+}

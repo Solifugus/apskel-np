@@ -32,6 +32,16 @@ export function storePathOf(binding) {
 
 function nodeToJson(node, primitiveTypes) {
   if (node.isPrimitive) primitiveTypes.add(node.type);
+  const fieldSite = node.fieldSite ?? null;
+  // Any option-consuming widget gets its list at its OWN store path —
+  // runtime-owned state, per RESOLVED (options are runtime state at the
+  // widget's own path). Three sources: an edge (multi-select, fetched),
+  // a select arrow domain (fetched), a select literal domain (static,
+  // baked here — no fetch, works serverless).
+  const hasOptions = !!(
+    fieldSite &&
+    (fieldSite.binding?.kind === "edge" || fieldSite.optionsSource || fieldSite.staticOptions)
+  );
   return {
     name: node.name,
     type: node.type,
@@ -41,11 +51,16 @@ function nodeToJson(node, primitiveTypes) {
     isPrimitive: !!node.isPrimitive,
     attrs: { ...node.attrs },
     manifest: node.manifest ?? null,
-    fieldPath: node.fieldSite ? storePathOf(node.fieldSite.binding) : null,
-    // An edge-bound input (multi-select) gets its option list at its OWN
-    // store path — runtime-owned state, filled via applyServerWrite, per
-    // RESOLVED (options are runtime state at the widget's own path).
-    optionsPath: node.fieldSite?.binding?.kind === "edge" ? `${node.path}.options` : null,
+    fieldPath: fieldSite ? storePathOf(fieldSite.binding) : null,
+    optionsPath: hasOptions ? `${node.path}.options` : null,
+    staticOptions: fieldSite?.staticOptions ?? null,
+    options: fieldSite?.optionsSource ?? null,
+    // A select bound inside a dynamic-record context refetches its
+    // options on selection change, like the edge widgets do.
+    optionsRecordPath:
+      fieldSite?.optionsSource && fieldSite.binding?.target?.recordSite
+        ? storePathOf(fieldSite.binding.target.recordSite.binding)
+        : null,
     action: node.actionSite ? functionToJson(node.actionSite.binding) : null,
     visible: node.visibleSite
       ? {
@@ -205,6 +220,24 @@ export function collectSetFields(root) {
     byStorePath.set(storePath, entry);
   }
   return [...byStorePath.values()];
+}
+
+// Every select-declared arrow options source, per RESOLVED (a select is
+// a domain-bearing column reference): the (table, value, label)
+// descriptor joins the options allowlist beside the edge-declared ones,
+// and the site rides along so the startup probe can name it.
+export function collectSelectOptions(root) {
+  const byKey = new Map();
+  for (const site of root.allRefs) {
+    if (!site.optionsSource) continue;
+    const key = `${site.optionsSource.table}:${site.optionsSource.value}:${site.optionsSource.label}`;
+    if (byKey.has(key)) continue;
+    byKey.set(key, {
+      options: { ...site.optionsSource },
+      site: { file: site.file, line: site.line, ref: site.raw },
+    });
+  }
+  return [...byKey.values()];
 }
 
 // Query-sourced RECORD contexts' bound fields (read-only): the store

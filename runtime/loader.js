@@ -682,6 +682,23 @@ function buildInstance(rawEl, parent, scope, ctx, expansionStack) {
     node.isPrimitive = true;
     node.manifest = primitive.manifest;
     node.primitiveDir = primitive.dir;
+
+    // A primitive whose manifest declares a closed mode menu gets it
+    // enforced here, per RESOLVED (rich-text primitive; mode is
+    // load-checked): unknown modes are load errors naming the site, and
+    // the default (the menu's first entry) is filled at load so the
+    // whole pipeline sees one canonical value.
+    if (Array.isArray(node.manifest.modes)) {
+      const mode = node.attrs.mode ?? node.manifest.modes[0];
+      if (!node.manifest.modes.includes(mode)) {
+        throw new ApskelLoadError(
+          `unknown mode '${node.attrs.mode}' on <${node.name}> — the closed menu for ` +
+            `'${type}' is: ${node.manifest.modes.join(", ")}`,
+          at
+        );
+      }
+      node.attrs.mode = mode;
+    }
   }
 
   // References in attribute values are written at the mount site, so they
@@ -697,7 +714,15 @@ function buildInstance(rawEl, parent, scope, ctx, expansionStack) {
         );
       }
       node.fieldSite = addRefSite(`{${value}}`, rawEl.file, rawEl.line, node, scope, ctx);
-      node.fieldSite.isInput = true; // a query-sourced context must reject this
+      // Mode settles inputness at load, per RESOLVED (rich-text
+      // primitive; mode is load-checked): a readonly-mode mount is a
+      // display, legal under a query-sourced record context; every
+      // other input mount stays rejected there.
+      node.fieldSite.isInput = !node.manifest.readonlyModes?.includes(node.attrs.mode);
+      // A select's option list IS its field's domain, per RESOLVED (a
+      // select is a domain-bearing column reference) — the resolver
+      // validates the domain and classifies it static-vs-fetched.
+      if (node.manifest.optionsFrom === "domain") node.fieldSite.optionsFromDomain = true;
       continue;
     }
     // source= — a declared query as the context's source, call grammar:

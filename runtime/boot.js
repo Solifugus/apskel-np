@@ -251,42 +251,58 @@ if (bundle.wire) {
     if (!resp?.ok) console.warn("[apskel] delete rejected:", resp?.error);
   };
 
-  // Option lists for edge-bound widgets: fetched at mount into the
-  // widget's OWN options path via the server-origin door, refetched on
-  // login (a token can unlock a users-read options table) and on
-  // selection change for dynamic contexts. Failure = empty options +
-  // warning, no retry — per RESOLVED (options are runtime state at the
-  // widget's own path).
+  // Option lists for fetched widgets — edge-bound multi-selects and
+  // arrow-domain selects: fetched at mount into the widget's OWN options
+  // path via the server-origin door, refetched on login (a token can
+  // unlock a users-read options table) and on selection change for
+  // dynamic contexts. Failure = empty options + warning, no retry — per
+  // RESOLVED (options are runtime state at the widget's own path).
+  // (Static options — a select's literal domain — ride the bundle and
+  // are seeded by the binder; they never appear here.)
   {
     const setByStore = new Map((bundle.setFields ?? []).map((s) => [s.storePath, s]));
     const optionWidgets = [];
     (function walk(n) {
-      if (n.optionsPath && setByStore.has(n.fieldPath)) {
-        optionWidgets.push({ s: setByStore.get(n.fieldPath), optionsPath: n.optionsPath });
+      if (n.optionsPath && n.options) {
+        // A select's arrow domain: the descriptor rides the node.
+        optionWidgets.push({
+          descriptor: n.options,
+          optionsPath: n.optionsPath,
+          recordPath: n.optionsRecordPath ?? null,
+          label: n.fieldPath ?? n.path,
+        });
+      } else if (n.optionsPath && setByStore.has(n.fieldPath)) {
+        const s = setByStore.get(n.fieldPath);
+        optionWidgets.push({
+          descriptor: s.options,
+          optionsPath: n.optionsPath,
+          recordPath: s.recordPath ?? null,
+          label: s.storePath,
+        });
       }
       for (const child of n.children) walk(child);
     })(root);
-    const fetchOne = async ({ s, optionsPath }) => {
+    const fetchOne = async ({ descriptor, optionsPath, label }) => {
       try {
-        const resp = await call({ type: "apskel.data.options", ...s.options });
+        const resp = await call({ type: "apskel.data.options", ...descriptor });
         if (resp?.ok) {
           store.applyServerWrite(optionsPath, resp.options);
         } else {
           store.applyServerWrite(optionsPath, []);
-          console.warn(`[apskel] options for ${s.storePath} unavailable:`, resp?.error);
+          console.warn(`[apskel] options for ${label} unavailable:`, resp?.error);
         }
       } catch (e) {
         store.applyServerWrite(optionsPath, []);
-        console.warn(`[apskel] options fetch for ${s.storePath} failed:`, e);
+        console.warn(`[apskel] options fetch for ${label} failed:`, e);
       }
     };
     refetchOptions = () => optionWidgets.forEach(fetchOne);
     for (const w of optionWidgets) {
       fetchOne(w);
-      if (w.s.recordPath) {
+      if (w.recordPath) {
         engine.watch({
           name: `options-refetch:${w.optionsPath}`,
-          fields: [w.s.recordPath],
+          fields: [w.recordPath],
           run: () => fetchOne(w),
         });
       }

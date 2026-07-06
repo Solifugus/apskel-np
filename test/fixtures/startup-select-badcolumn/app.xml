@@ -1,0 +1,13 @@
+<app title="Select Arrow Names A Missing Column" version="0.1">
+
+    <client>
+
+        {pickedTag = ""}
+
+        <panel type="layout" orient="horizontal">
+            <tagPick type="select" field="pickedTag: sb_tags.id->sb_tags.namee"/>
+        </panel>
+
+    </client>
+
+</app>
