@@ -484,7 +484,7 @@ Tentative component resolution order:
 
 Application overrides should remain relatively rare.
 
-DECISION-POINT: Decide whether component overrides should fully replace shared components or allow inheritance/extension.
+DECISION-POINT: Decide whether component overrides should fully replace shared components or allow inheritance/extension. (Partially touched, design session 7: the shipped `conflict-prompt` composite establishes **full replacement via contract** as the pattern for *framework-shipped* composites — an app replaces it by writing its own against the reserved `app.sync.*` region and the `apskel.sync.*` functions, not by inheriting or extending it. See RESOLVED (the conflict prompt is a framework composite over a reserved region) in the Phase 10.2 block. The general override/inheritance question for *app* composites remains open — recorded here so it is decided deliberately, not by side-effect of that one component.)
 
 ---
 
@@ -2484,11 +2484,11 @@ and stay illegal there, per RESOLVED (named queries are declared,
 read-only sources).
 
 **Phase 10.2 (offline queue, resync, the `detect` prompt) — design
-session 7, in progress.** Questions 1 (the queue's durable local shape)
-and 2 (the flush protocol) are closed by the entries below. Question 3
-(the prompt UI: which tab presents, and what keep-mine and take-theirs
-do to the store and the queue) opens next; then question 4 (`sync_log`,
-now carrying the insert idempotency record and its retention rule) and
+session 7, in progress.** Questions 1 (the queue's durable local shape),
+2 (the flush protocol), and 3 (the conflict prompt) are closed by the
+entries below. Question 4 (`sync_log`'s shape — the insert idempotency
+record with its retention rule, what a log row *is* per accepted write,
+and the explicit statement of what it cannot contain) opens next; then
 question 5 (edges under `detect`, or the recorded lww deferral renewed);
 then fixtures, then code. Nothing here is built until the session
 closes, per the standing discipline.
@@ -2728,6 +2728,28 @@ recognition is by declared binding exactly as for insert values (the
 edge's members are keys of a declared target table), never by sniffing
 negatives.
 
+Two invariants in this entry are **presently vacuous** under v0.1's
+only conflict source (`detect` sets on real, server-existing rows), and
+are recorded as such rather than as firing rules — an invariant written
+as if it fires when it cannot is exactly the falsehood this doc exists
+to prevent (established in question 3, RESOLVED (the offline-born case)):
+
+* *Transitive parking* — a temp-id-connected component contains no
+  conflict-capable entry (a row never pulled was never assigned a
+  baseRevision), so a "conflicted parent lineage with a temp id to
+  reference" cannot exist today.
+* *Clean-remainder flush* — "the lineage's other entries were only
+  parked, never conflicted, and flush as the clean writes they always
+  were" (stated in question 3's take-theirs mechanics) also has no
+  firing case: per-record detection conflicts **all** queued fields on
+  a moved row together, so a conflicted lineage in v0.1 is exactly one
+  real row's field entries, all conflicted — there is no
+  parked-not-conflicted remainder to flush.
+
+Both stand as invariants against the day a new conflict source lands;
+question 5 (edges under `detect`) is named as where either could become
+load-bearing.
+
 The failure taxonomy at flush, closed:
 
 * **409** — the server moved between pull and flush. A late-detected
@@ -2807,6 +2829,180 @@ the insert idempotency keys**: before them, a reload mid-flush was the
 double-insert crash in different clothing. Recorded so nobody later
 weakens the key mechanism believing it serves only the crash-retry
 case.
+
+RESOLVED (the conflict prompt is a framework composite over a reserved
+region): the `detect` prompt is the first time the framework must put
+something on screen, and two load-bearing positions meet here — the
+framework owns no app UI, and primitives hold no state. The fork was
+whether the prompt is (a) a framework-shipped composite the app mounts,
+or (b) a reserved store region plus a convention the app is obligated to
+render. Resolution: **(a), built as (b)-plus-a-default.** The reserved
+`app.sync.*` region and the `apskel.sync.*` resolution functions are the
+*contract*; the shipped `conflict-prompt` composite is a *replaceable
+reference implementation* over that contract. This costs no new
+framework concept — the shipped composite passes the same litmus test
+`login` does (pure XML over a specified region plus framework-function
+calls, no bespoke JS) — while not shipping it would tax every `detect`
+app with hand-written conflict UI before `detect` works at all, KF
+first. The three obligations of shipping UI, discharged:
+
+* **Restyle** — by the standing styling doctrine, no new rule: the
+  shipped composite carries no CSS, the one app-level theme styles it,
+  exactly as composites normally carry none. That this needs no
+  exception is itself an argument for the fork resolution.
+* **Replace** — write your own composite against the same region and
+  the same functions; first-class by construction because the region is
+  contract, not implementation. This decides **full replacement via
+  contract** for framework-shipped composites specifically; the general
+  app-composite override/inheritance question stays open at its
+  DECISION-POINT, flagged there rather than settled by side-effect.
+* **Not mounted** — a **load-time error**. `conflict="detect"` anywhere
+  in the app requires at least one load-bound reference site reading the
+  `app.sync.*` region **and** at least one load-bound call site for a
+  resolution function (`apskel.sync.keepMine`/`takeTheirs`); both bind
+  at load, so the check is mechanical. Visibility alone is insufficient
+  — an app that reads `app.sync.conflict.pending` into a status bar but
+  wires no resolution function is the silent-parking machine the error
+  exists to prevent (conflicts park forever with no door out). An app
+  offering only `takeTheirs` deliberately is legal; an app offering
+  neither is the error. The rejected alternatives — park-forever, or
+  auto-inject the composite — respectively renege on "graduates from log
+  to prompt" and put UI on screen the app never declared.
+
+RESOLVED (the `app.sync.*` region is a derived view, machinery-written):
+`app.sync.*` is a reserved store region written only by the sync
+machinery — the exact parallel of `app.identity.*` written only by the
+auth machinery. It is a **derived view of the head parked conflict,
+never a duplicate of it**: recomputable at any moment from the queue
+(`mine` = the parked entry's value) and the replica (`theirs` = the
+last-pulled server value), so reload-survival is by construction — both
+sources are durable, the boot path re-derives, and nothing about the
+prompt persists separately. Shape, one conflict at a time:
+
+* `app.sync.conflict.pending` — count of unresolved conflicts; `0` or
+  absent means no prompt. The natural `visible=` gate.
+* `app.sync.conflict.table`, `.id`, `.field` — what collided (`.id` is
+  available; apps rarely show it).
+* `app.sync.conflict.mine` — the queued value.
+* `app.sync.conflict.theirs` — the replica's value for that field.
+
+Deliberately **excluded**: any revision. "Revisions are wire
+bookkeeping — never a visible field" already holds; the adopted revision
+rides the queue entry and the revisions map, invisible. One
+conflict-at-a-time rather than a list, with a reason: collections bind
+to tables and queries, and there is no binding form that repeats over
+client-local derived state; inventing store-backed repetition for a
+modal is real machinery for a corner. `.pending` keeps the user oriented
+meanwhile; a store-sourced collection is a plausible primitive-era
+addition this shape does not foreclose. Accepted wart: the region
+carries **stored values**, so a conflict on a domain-bearing field
+prompts with the stored key, not the label — `theirs` on a
+tags-adjacent field reads as an integer. No label-lookup machinery for
+this corner in v0.1; the options mechanism (`apskel.data.options`) is
+where a future fix would draw from.
+
+RESOLVED (every tab may prompt; resolution binds to the seen conflict):
+per the lock-scope ruling, which tab prompts is a free choice, made
+deliberately: **every tab derives the region and may present the
+prompt.** Electing a prompting tab would need a lock held across user
+input — which the lock-scope ruling forbids — or an election mechanism
+the corner does not warrant. A stale prompt in a second tab heals **on
+interaction**, not by push — the same stance as the accepted offline
+cross-tab divergence, and rejecting a BroadcastChannel side-channel for
+the prompt is the same consistency argument that rejected it for store
+liveness. Two tabs may therefore resolve concurrently, so the resolution
+functions are **check-then-act, bound to the conflict the user saw**:
+the XML surface stays argless (`apskel.sync.keepMine()` /
+`apskel.sync.takeTheirs()`), but the implementation captures the
+conflict identity (`table`, `id`, `field`) from the *calling tab's
+region values at click time* and acts on THAT conflict, under a
+short-lived Web Lock (mechanical phase only, the same discipline as
+flush). If that conflict no longer exists at act time — resolved in
+another tab, or evaporated — the action no-ops and the region
+re-derives to the next conflict. This closes a mis-targeting race that
+argless-act-on-head would open: without the captured identity, tab B
+clicking `takeTheirs` on `body` could land on `title` after tab A
+resolved `body` and the head moved — acting on a conflict the user never
+saw. Resolve twice, act once — and never on the wrong conflict.
+
+RESOLVED (the prompt's mechanics reuse the boot doors; resolution
+verbs): the reconcile pull must not repaint a conflicted field to
+`theirs` before the user answers — that reads as the data loss the
+boot-overlay ruling named. So reconcile reuses the **boot sequence's two
+doors verbatim**: pull applies server state through `applyServerWrite`
+(`server` origin), then parked entries re-overlay through `replay`.
+Mid-prompt the screen shows `mine`; `theirs` lives only in
+`app.sync.conflict.theirs`. No third door, no new origin — the origins
+taxonomy proving out. The no-flicker guarantee is **task boundaries, not
+luck**: pull-apply and parked re-overlay run within one task per record,
+so no intermediate paint shows `theirs` before the overlay restores
+`mine`. The verbs:
+
+* **keep-mine** — the parked entry's pinned baseRevision updates to the
+  **current revisions-map value at act time** (under the resolution
+  lock), *not* the revision the pull adopted. Pull-time pinning would
+  ping-pong under per-field sequencing: each keep-mine's flush moves the
+  server revision, staling the next field's adoption on arrival, 409ing,
+  re-parking — a three-field conflict resolving as a loop. The
+  revisions map is current at act time by the existing
+  echo-updates-revision rule (the client's own flush ack maintains it).
+  The lineage's conflict evaporates, so it unparks and flushes under a
+  **fresh lock acquisition**, per the lock-scope ruling. The store does
+  not change — it already shows `mine`. A genuine third-party move
+  between act and flush still 409s into the late-conflict path and
+  re-parks with a fresh `theirs`; that path (question 2's taxonomy)
+  remains, narrowed to real races.
+* **take-theirs** — the queued entry is **removed outright**, not
+  dead-lettered: dead-letter is for errors, and this is a deliberate
+  user choice, not a loss. `theirs` applies to the store through
+  `applyServerWrite` — confirmed against the amended origins entry, not
+  assumed: the value sits in the replica, which holds only
+  server-acknowledged state by construction, so boot/resync is already a
+  legitimate caller of the `server` gate for exactly such values. Same
+  justification, same door, no new minting. The discarded `mine` value
+  is an **accepted loss**: no audit row, and since take-theirs never
+  touches the server (the queued write is simply never sent), `sync_log`
+  cannot see it either — recorded for question 4's scoping so the log's
+  shape does not drift into a client-resolution table.
+
+Parking is a **derived property** — a lineage is parked while it holds
+≥1 conflicted entry; either verb removes the conflict, the derivation
+updates, and a lineage with nothing else conflicting unparks and flushes
+fresh-lock. No bespoke unpark bookkeeping. (The "other entries flush as
+clean writes" clause is presently vacuous — see the joint vacuity note
+in RESOLVED (replay order is per-lineage).)
+
+RESOLVED (resolution is per-field, sequenced): prompts are **per-field**,
+sequenced record-by-record in seq order — not per-record. Two reasons:
+structurally, a per-record prompt must render a variable-length list of
+field pairs, the store-backed repetition just declined; semantically,
+per-field is strictly more expressive — keep-mine on `body`, take-theirs
+on `title` of one record is a real resolution a per-record verb cannot
+express. Cost, recorded and accepted for v0.1: a three-field collision
+on one record is three prompts, kept legible by `.pending`. Granularity
+asymmetry stated honestly: detection is per-record (one revision), so
+all queued fields on a moved record conflict together even if the server
+changed a different field — that is `detect`'s declared granularity, not
+a prompt defect. The revision movement across a sequence of per-field
+resolutions is handled by keep-mine's act-time pinning, above.
+
+RESOLVED (the offline-born case is closed): an `insert` cannot conflict
+— the row has no server counterpart, no revision, no baseRevision,
+nothing to mismatch; insert rejections are 400s (dead-letter), never
+conflicts. Following temp-id connectivity to its end closes more: temp
+chains link only *temp* ids, and every entry on a temp-rooted row also
+carries no baseRevision (a row never pulled was never seen), so an
+entire offline-born connected component contains **no conflict-capable
+entry**. Therefore parking-by-transitivity is the only way an insert
+lineage *could* park — and in v0.1 nothing can park it. This is the
+source of the vacuity recorded against question 2's transitive-parking
+and clean-remainder invariants; they stand for the day a new conflict
+source (question 5, edges under `detect`) makes them fire.
+
+A reference sketch of the shipped `conflict-prompt` composite — labeled
+sketch, not decided; it renders against the real primitives only in the
+implementation phase — appears in the session-7 working notes, not
+inlined here as design.
 
 ---
 
