@@ -2484,13 +2484,14 @@ and stay illegal there, per RESOLVED (named queries are declared,
 read-only sources).
 
 **Phase 10.2 (offline queue, resync, the `detect` prompt) — design
-session 7, in progress.** Question 1 — the queue's durable local shape —
-is closed by the entries below. Question 2 (the flush protocol:
-leadership, replay order, temp-id mechanics, token re-mint mid-flush)
-opens next, and its first item is already named by the recorded debt at
-the end of this block; the keep-mine/take-theirs prompt UI, `sync_log`,
-and the edge-conflict revisit follow. Nothing here is built until the
-session closes, per the standing discipline.
+session 7, in progress.** Questions 1 (the queue's durable local shape)
+and 2 (the flush protocol) are closed by the entries below. Question 3
+(the prompt UI: which tab presents, and what keep-mine and take-theirs
+do to the store and the queue) opens next; then question 4 (`sync_log`,
+now carrying the insert idempotency record and its retention rule) and
+question 5 (edges under `detect`, or the recorded lww deferral renewed);
+then fixtures, then code. Nothing here is built until the session
+closes, per the standing discipline.
 
 RESOLVED (durable local shape: a replica plus a queue, in wire
 vocabulary): the client persists exactly two structures, with different
@@ -2540,8 +2541,11 @@ inside the synchronous cascade, there is no serialize-the-world blob
 ceiling, and per-key puts mean persisting one field write does not
 rewrite the store. One database per `apskel:<app>:<identity>` —
 `user_devices` is deliberately many-to-many, so a shared device must not
-leak one user's replica or pending edits into another's boot. Three
-object stores: `replica`, `queue`, `meta` (the cached bundle version).
+leak one user's replica or pending edits into another's boot. Four
+object stores: `replica`, `queue`, `meta` (the cached bundle version,
+the temp-id counter, and the live temp-id translation mapping — see
+question 2), and `dead-letter` (400-rejected entries, moved rather than
+deleted — see the failure taxonomy in question 2).
 Persistence is a deferred-effect consumer at settle, coalesced per
 field: the disk sits where the Wire sits — after the cascade, never
 inside it. The loss window is therefore the settle window plus the async
@@ -2645,7 +2649,164 @@ near-idempotent under revisions, `insert` is not. The storage shape
 approved above is what creates the problem, so the flush protocol
 (question 2) opens with flush leadership — Web Locks or equivalent — as
 a first-class item, alongside replay order, temp-id mechanics, and token
-re-mint mid-flush.
+re-mint mid-flush. (Paid in question 2 — see RESOLVED (flush leadership:
+the lock is the leadership), immediately below.)
+
+RESOLVED (flush leadership: the lock is the leadership): no election,
+no heartbeat, no leader tab. Every tab, on connect, requests a Web Lock
+named `apskel:<app>:<identity>:flush` and runs the resync sequence under
+it. The first tab in does the real work; a later tab acquires the lock
+after release, finds the queue empty, and its resync degenerates to a
+pull. Web Locks is vanilla — no dependency — and the browser releases a
+dead tab's locks automatically: crash-safety comes from the platform,
+not from us. Consequences:
+
+* **Resync is serialized per identity, not per tab.** Connect → resync
+  under the lock is the *only* connect path: an online boot is just a
+  resync whose queue may be empty. One door.
+* **Prompt surfacing is decoupled from leadership entirely** (a
+  consequence of the lock-scope ruling, next entry): any tab can present
+  the conflict prompt, and question 3 chooses which as a free choice,
+  not an inherited constraint.
+
+RESOLVED (the lock covers the mechanical phase only): a lock held
+across an unanswered conflict prompt would block every other tab's
+connect path — the visible tab could not even degenerate to a pull
+while a hidden tab waited on a question nobody can see. The lock
+therefore covers pull → reconcile → flush of clean lineages, then
+releases. Conflicted lineages park durably with no new persistence:
+they are un-acked, so they are still in the queue by the
+dequeue-on-ack rule itself. Post-resolution flush is a fresh lock
+acquisition.
+
+RESOLVED (dequeue on ack; insert carries the idempotency key): an entry
+leaves the durable queue only when the server answers — 2xx, or a
+terminal 4xx (which moves it to the dead-letter store per the failure
+taxonomy). A crash mid-flush leaves un-acked entries queued; the next
+flush resends them. Delete is **ruled idempotent**: deleting an
+already-missing row answers success, not 400 — otherwise a crash-retry
+of an already-committed delete lands in the dead-letter path as a
+spurious error. With that ruling, insert is the ONLY non-idempotent
+verb, which is exactly why idempotency keys attach only to inserts.
+Every flushed `insert` carries the key `<dbName>#<seq>` — both parts
+already durable and unique by construction; the server records key →
+result and answers a replayed key with the **original result** (the row
+id it assigned the first time) instead of inserting again. This binds
+question 4 harder than "store the key": a queue can sit offline for
+weeks, so a replayed key can arrive arbitrarily late, and idempotency
+records cannot be casually TTL'd. Question 4 decides the retention
+rule; the natural shape is retain-per-device, cleaned on device
+revocation. Coherence dividend: a crash after insert-ack but before the
+temp-id rewrite is healed by the same mechanism — the retry gets the
+same real id back and the rewrite completes.
+
+Flushed envelopes are sent verbatim as stored, the enqueuer's
+`sourceClient` preserved — and this is a reason, not an accident: when
+the flush leader is a different tab, the broadcast echo suppresses in
+the enqueueing tab (which holds the optimistic value) and applies in
+the leader tab (which, per the accepted offline divergence, never had
+it) — the echo heals the leader's store for free.
+
+RESOLVED (replay order is per-lineage; the failure taxonomy is closed):
+the ordering that matters is per **lineage** — entries on the same
+`table:id`, plus entries connected through a temp-id reference (a child
+insert carrying its offline-born parent's temp id): the transitive
+closure over temp-id connectivity. Within a lineage, seq order is
+strict — insert before sets before delete; across lineages, entries are
+independent. The reconcile step (pull first, then compare each `detect`
+entry's pinned baseRevision against the pulled revision) partitions
+lineages into clean and conflicted: clean lineages flush immediately,
+conflicted lineages park until their prompt resolves — RESOLVED
+(conflict detection mechanism)'s "prompted before push; everything else
+flushes cleanly," made precise. Stated explicitly so it survives:
+**parking is transitive over temp-id connectivity** — a conflicted
+parent lineage parks the offline-born children whose inserts reference
+its temp id. `setMembers` members arrays participate in both temp-id
+rewrite and lineage connectivity — a tag created offline and
+immediately attached is a members array containing a temp id;
+recognition is by declared binding exactly as for insert values (the
+edge's members are keys of a declared target table), never by sniffing
+negatives.
+
+The failure taxonomy at flush, closed:
+
+* **409** — the server moved between pull and flush. A late-detected
+  conflict; same prompt path, the lineage parks.
+* **400** — stale binding or DB rejection. Dequeue-on-400 **moves** the
+  entry to the `dead-letter` object store in the same database rather
+  than deleting it, with the loud log pointing at it — "recoverable
+  from the log" is only true if the log is durable, and the console is
+  not. No retry: retrying a deterministic rejection is a loop.
+  Dies-loudly is the house rule, and one object store is what it costs.
+* **Network failure** — stop; everything un-acked stays queued; we are
+  simply offline again.
+
+RESOLVED (temp ids: negative integers, queue rewrite, refetch heals):
+temp ids are **negative integers** allocated by decrementing a counter
+in the `meta` store. They cannot collide with serial PKs, they sort,
+they are visibly temporary in any debug dump, and they keep instance
+paths (`app.board[-3].body`) the same shape as real ones. On insert ack
+(real id R for temp T), the flush leader rewrites T→R in the *durable
+queue only*: later entries' `id` slots, temp-id references inside later
+inserts' `values`, and `setMembers` members arrays — recognized by
+declared binding (the column or edge the resolved app binds to the temp
+row's table), never by sniffing for negative numbers, since an app is
+allowed to store a genuinely negative integer. The in-memory store is
+deliberately **not** remapped live: optimistic instances keyed `[T]`
+are replaced by server truth through the resync pull/refetch — the
+collection refetch returns R, membership update destroys `[T]` and
+instantiates `[R]` through the ordinary Phase 8 door, and a second tab
+holding `[T]` heals by the same refetch with zero cross-tab
+coordination. One recorded loss: per-row scratch (`{expanded}`) on an
+offline-born row dies at resync.
+
+RESOLVED (the live translation mapping): the rewrite pass alone has a
+hole. It fixes T→R for entries that exist at rewrite time, but the
+in-memory instance stays keyed `[T]` until the refetch destroys it, and
+the user can keep typing into it in exactly that window — resync
+running, row on screen. Those keystrokes would enqueue with id T
+*after* the rewrite pass has passed: orphans, never rewritten, 400ing
+at the next flush against a nonexistent negative id — dying loudly but
+*wrongly*, because the edit was legitimate. Therefore: the T→R mapping
+persists in the `meta` store from insert-ack until the `[T]` instance
+is destroyed by the heal, and **enqueue translates through the live
+mapping** — a write captured against T at interaction time enqueues as
+R. Capture-at-interaction-time stays honest: the user really was
+editing that row; T is its local name, R its durable one. The mapping's
+deletion is tied to the same refetch that completes the heal, so the
+mapping and the window have identical lifetimes by construction.
+
+RESOLVED (token re-mint mid-flush; flush never reattributes): a 401
+mid-flush pauses the flush, re-mints through the device credential
+exactly as the existing silent-re-mint path does, and resumes the same
+entry. If re-minting fails (credential revoked), the flush aborts with
+the queue intact. The rule: **queue entries flush only under the
+identity whose database holds them.** A stranded queue waits for its
+own user to re-authenticate; logging in as someone else switches
+databases and never touches it. Never merge, never reattribute — for
+every identity; the anon boundary is a corollary of this rule, not a
+sibling.
+
+RESOLVED (offline cross-tab divergence is accepted): two offline tabs
+share the durable queue — coalescing works across tabs by construction
+— but have independent in-memory stores, so tab A's offline edit does
+not repaint tab B until resync. Accepted, with the healing paths named:
+resync repaint for the general case, and the preserved-`sourceClient`
+echo dividend for the leader tab specifically.
+BroadcastChannel-as-local-SSE (the shared database playing server, a
+channel playing the event stream) is **rejected** as a second echo
+implementation maintained forever for a corner of a corner.
+
+RESOLVED (component updates apply by reload): "apply component/app
+updates first" concretely means the lock holder compares the cached
+bundle version against the server's; on mismatch it caches the new
+bundle and reloads the page. The reload releases the lock, boot replay
+reruns under the new bundle, and resync restarts from scratch — safe
+because every step is idempotent, and that idempotence **depends on
+the insert idempotency keys**: before them, a reload mid-flush was the
+double-insert crash in different clothing. Recorded so nobody later
+weakens the key mechanism believing it serves only the crash-retry
+case.
 
 ---
 
