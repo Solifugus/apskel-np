@@ -145,6 +145,27 @@ export function attachWire(
     return result.rows.length > 0 ? result.rows[0].owner : null;
   }
 
+  // The dequeuedThrough watermark, per RESOLVED (receipt retention): the
+  // client piggybacks its lowest still-unacked seq on flush traffic and
+  // the server opportunistically prunes receipts below it. device_id is
+  // the token's, never the envelope's; without identity there is no
+  // prune (and no receipts table to prune). Degrades to lingering, never
+  // to wrong — a failed prune is logged, not fatal.
+  async function pruneReceipts(envelope, req) {
+    const s = envelope.sync;
+    if (!auth || !s || s.dequeuedThrough == null || s.db == null) return;
+    const identity = auth.identity(req);
+    if (!identity) return;
+    try {
+      await db.query(
+        "DELETE FROM sync_receipts WHERE db = $1 AND device_id = $2 AND seq < $3",
+        [s.db, identity.deviceId, s.dequeuedThrough]
+      );
+    } catch (e) {
+      log.warn?.(`[apskel] receipt prune failed (ignored): ${e.message}`);
+    }
+  }
+
   const handlers = {
     // Auth wire types (register/login/token) when the app uses identity.
     ...(auth ? auth.handlers : {}),
@@ -152,6 +173,7 @@ export function attachWire(
     "apskel.data.set": async (envelope, req, res) => {
       const g = await guardData(envelope, req, res, "write");
       if (!g) return;
+      await pruneReceipts(envelope, req);
       const b = g.b;
       const { table, id, field, value, sourceClient } = envelope;
 
@@ -426,16 +448,58 @@ export function attachWire(
           }
         }
       }
+      await pruneReceipts(envelope, req);
+
+      // The receipt path, per RESOLVED (dequeue on ack; insert carries
+      // the idempotency key): insert is the only non-idempotent verb, so
+      // only inserts get receipts. The claim SELECT answers a replay with
+      // the ORIGINAL assigned id — no second insert, nothing broadcast.
+      // device_id is the token's; a tokenless app has no sync.sql and
+      // sync is ignored entirely.
+      const sync = envelope.sync;
+      const receipted =
+        auth && identity && sync && sync.db != null && sync.seq != null;
+      if (receipted) {
+        let found;
+        try {
+          found = await db.query(
+            "SELECT assigned_id FROM sync_receipts WHERE db = $1 AND device_id = $2 AND seq = $3",
+            [sync.db, identity.deviceId, sync.seq]
+          );
+        } catch (e) {
+          return res.status(400).json({ ok: false, error: `receipt claim failed: ${e.message}` });
+        }
+        if (found.rows.length > 0) {
+          return res.json({ ok: true, id: found.rows[0].assigned_id, replayed: true });
+        }
+      }
+
       const cols = Object.keys(values);
-      const sql =
+      const plainInsert =
         `INSERT INTO ${quoteIdent(table)} ` +
         (cols.length
           ? `(${cols.map(quoteIdent).join(", ")}) VALUES (${cols.map((_, i) => `$${i + 1}`).join(", ")})`
           : `DEFAULT VALUES`) +
         ` RETURNING id`;
+      // With a receipt, the data insert and the receipt commit in ONE
+      // statement — the setMembers discipline: the shared connection
+      // makes multi-statement transactions interleavable, a single CTE
+      // is not. A concurrent duplicate aborts whole on the receipt PK
+      // (both inserts together); the loser's retry replays cleanly.
+      let sql = plainInsert;
+      let params = Object.values(values);
+      if (receipted) {
+        const n = params.length;
+        sql =
+          `WITH ins AS (${plainInsert}), receipt AS (` +
+          `INSERT INTO sync_receipts (db, device_id, seq, assigned_id, table_name) ` +
+          `SELECT $${n + 1}, $${n + 2}, $${n + 3}, ins.id, $${n + 4} FROM ins) ` +
+          `SELECT id FROM ins`;
+        params = [...params, sync.db, identity.deviceId, sync.seq, table];
+      }
       let result;
       try {
-        result = await db.query(sql, Object.values(values));
+        result = await db.query(sql, params);
       } catch (e) {
         return res.status(400).json({ ok: false, error: `insert rejected: ${e.message}` });
       }
@@ -475,9 +539,22 @@ export function attachWire(
         if (!identity) {
           return res.status(401).json({ ok: false, error: "authentication required" });
         }
+        await pruneReceipts(envelope, req);
         if (rules.write === "owner") {
           const owner = await ownerOf(table, id);
           if (owner === null || String(owner) !== String(identity.userId)) {
+            // Delete is ruled idempotent (design session 7): a MISSING
+            // row answers success — the crash-retry of an already-
+            // committed delete must not dead-letter as a spurious
+            // error. A row that EXISTS but is unowned keeps the
+            // unowned-denies floor.
+            const exists = await db.query(
+              `SELECT 1 FROM ${quoteIdent(table)} WHERE id = $1`,
+              [id]
+            );
+            if (exists.rows.length === 0) {
+              return res.json({ ok: true, missing: true });
+            }
             return res.status(403).json({ ok: false, error: `write on ${table} requires owner` });
           }
           g.ownerUserId = owner;
@@ -490,7 +567,9 @@ export function attachWire(
         return res.status(400).json({ ok: false, error: `delete rejected: ${e.message}` });
       }
       if (result.rowCount === 0) {
-        return res.status(404).json({ ok: false, error: `no ${table} row with id ${id}` });
+        // Already gone: success, nothing to broadcast — insert is the
+        // only non-idempotent verb, and this is half of why.
+        return res.json({ ok: true, missing: true });
       }
       await broadcastAccepted(g, {
         type: "apskel.data.deleted",

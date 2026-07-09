@@ -138,6 +138,12 @@ if (usesAuth) {
   const identitySql = fileURLToPath(new URL("../server/identity.sql", import.meta.url));
   await db.query(fs.readFileSync(identitySql, "utf8"));
   console.log(`applied ${identitySql}`);
+  // sync_receipts rides identity: offline writes require the identity
+  // machinery, so the table's existence and its retention anchor (the
+  // devices FK) are the same condition — design session 7, Q4.
+  const syncSql = fileURLToPath(new URL("../server/sync.sql", import.meta.url));
+  await db.query(fs.readFileSync(syncSql, "utf8"));
+  console.log(`applied ${syncSql}`);
   auth = createAuth({ db });
 }
 

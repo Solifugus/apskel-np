@@ -5,7 +5,7 @@
   "type": "module",
   "license": "UNLICENSED",
   "scripts": {
-    "test": "node test/loader.test.js && node test/store.test.js && node test/render.test.js && node test/wire.test.js && node test/auth.test.js && node test/slice.test.js && node test/nav.test.js && node test/perm.test.js && node test/mv.test.js && node test/coll.test.js && node test/publish.test.js && node test/prim.test.js && node test/queue.test.js"
+    "test": "node test/loader.test.js && node test/store.test.js && node test/render.test.js && node test/wire.test.js && node test/auth.test.js && node test/slice.test.js && node test/nav.test.js && node test/perm.test.js && node test/mv.test.js && node test/coll.test.js && node test/publish.test.js && node test/prim.test.js && node test/queue.test.js && node test/sync.test.js"
   },
   "dependencies": {
     "express": "^5.2.1",
