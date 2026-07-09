@@ -516,6 +516,13 @@ function buildInstance(rawEl, parent, scope, ctx, expansionStack) {
       at
     );
   }
+  if (parent.isRoot && rawEl.tag === "sync") {
+    throw new ApskelLoadError(
+      "'sync' is a reserved top-level name — app.sync.* is the framework " +
+        "conflict region, per RESOLVED (the app.sync.* region is a derived view)",
+      at
+    );
+  }
   const type = rawEl.attrs.type;
   if (!type) {
     throw new ApskelLoadError(`component instance <${rawEl.tag}> has no type attribute`, at);

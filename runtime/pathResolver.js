@@ -126,6 +126,83 @@ export function resolveReferences(root) {
     }
   }
 
+  // detect's two load obligations (Phase 10.2, design session 7).
+  const conflictNodes = [];
+  (function collectConflicts(node) {
+    if (node.attrs?.conflict === "detect" || node.attrs?.conflict === "lww") {
+      conflictNodes.push(node);
+    }
+    for (const child of node.children ?? []) collectConflicts(child);
+  })(root);
+  if (conflictNodes.length > 0) {
+    const usesAuth = root.allRefs.some(
+      (s) => s.binding?.kind === "function" && s.binding.name.startsWith("apskel.auth.")
+    );
+    // Offline writes require the identity machinery, per RESOLVED
+    // (offline writes require the identity machinery): a tokenless app
+    // has no device row, no per-device seq namespace, and no place to
+    // anchor insert receipts — so detect/lww on a context whose table is
+    // an insert target cannot queue and is refused at load.
+    if (!usesAuth) {
+      const insertTargets = new Set();
+      (function collectCollections(node) {
+        if (node.isCollection && node.attrs?.table !== undefined) {
+          insertTargets.add(node.attrs.table);
+        }
+        for (const child of node.children ?? []) collectCollections(child);
+      })(root);
+      for (const s of root.allRefs) {
+        if (s.binding?.kind === "function" && s.binding.name === "apskel.data.create") {
+          insertTargets.add(JSON.parse(s.binding.args[0].value));
+        }
+      }
+      const offending = conflictNodes.find((n) => insertTargets.has(n.attrs.table));
+      if (offending) {
+        throw new ApskelLoadError(
+          `conflict="${offending.attrs.conflict}" on <${offending.name}> but its table ` +
+            `'${offending.attrs.table}' is an insert target and this app never calls ` +
+            `apskel.auth.* — offline writes require the identity machinery (there is ` +
+            `no device to anchor insert receipts to); a tokenless app is ` +
+            `offline-readonly for writes`,
+          { file: offending.file, line: offending.line }
+        );
+      }
+    }
+    // The not-mounted floor, per RESOLVED (the conflict prompt is a
+    // framework composite over a reserved region): detect anywhere
+    // requires a reference site reading app.sync.* AND a call site for a
+    // resolution function — an app that shows the conflict but wires no
+    // verb is the silent-parking machine this error exists to prevent.
+    const detectNode = conflictNodes.find((n) => n.attrs.conflict === "detect");
+    if (detectNode) {
+      const readsRegion = root.allRefs.some(
+        (s) => s.binding?.kind === "absolute" && (s.binding.field ?? "").startsWith("sync.")
+      );
+      const hasVerb = root.allRefs.some(
+        (s) => s.binding?.kind === "function" && s.binding.name.startsWith("apskel.sync.")
+      );
+      const at = { file: detectNode.file, line: detectNode.line };
+      if (!readsRegion) {
+        throw new ApskelLoadError(
+          `conflict="detect" on <${detectNode.name}> but nothing in this app reads ` +
+            `the app.sync.* region — a conflict would park forever with no prompt; ` +
+            `mount the shipped conflict-prompt composite (or your own over the same ` +
+            `region and apskel.sync.* functions)`,
+          at
+        );
+      }
+      if (!hasVerb) {
+        throw new ApskelLoadError(
+          `conflict="detect" on <${detectNode.name}> and the app reads app.sync.*, ` +
+            `but no action calls a resolution function — a conflict would park ` +
+            `forever with no door out; wire apskel.sync.keepMine() or ` +
+            `apskel.sync.takeTheirs() (the shipped conflict-prompt composite carries both)`,
+          at
+        );
+      }
+    }
+  }
+
   return root;
 }
 
@@ -200,13 +277,17 @@ function resolveSite(site, root) {
     );
   }
   // Route targets (and any other flagged writer) may not claim the
-  // identity region — it is written only by the auth machinery.
+  // identity region — it is written only by the auth machinery. The
+  // sync region is its parallel: written only by the sync machinery.
   if (site.forbidIdentity && site.binding) {
     const p = site.binding.field
       ? `${site.binding.targetPath}.${site.binding.field}`
       : site.binding.targetPath;
     if (p === "app.identity" || p.startsWith("app.identity.")) {
       fail(site, `may not target the reserved identity region '${p}'`);
+    }
+    if (p === "app.sync" || p.startsWith("app.sync.")) {
+      fail(site, `may not target the reserved sync region '${p}'`);
     }
   }
   // A select's option list IS its field's domain, per RESOLVED (a
@@ -558,7 +639,9 @@ function resolveAbsolute(site, expr, root) {
   const segs = expr.split(".");
   // app.identity.* is the reserved framework region — the auth machinery
   // writes it, anything may read it, and no component may claim the name.
-  if (segs[1] === "identity") {
+  // app.sync.* is its Phase 10.2 parallel: the derived view of the head
+  // parked conflict, written only by the sync machinery.
+  if (segs[1] === "identity" || segs[1] === "sync") {
     return { kind: "absolute", target: root, targetPath: "app", field: segs.slice(1).join(".") };
   }
   let cur = root; // segs[0] === 'app'
@@ -634,6 +717,13 @@ function resolveFunction(site, expr, root) {
   }
   if (name === "apskel.nav.go" && args.length !== 1) {
     fail(site, `apskel.nav.go takes exactly one argument (the path)`);
+  }
+  if (name.startsWith("apskel.sync.") && args.length !== 0) {
+    fail(
+      site,
+      `${name} takes no arguments — resolution binds to the conflict the ` +
+        `calling tab's app.sync.* region shows at click time`
+    );
   }
   if (name === "apskel.data.create") {
     const isStringLit = (a) => a.kind === "literal" && a.value.startsWith('"');

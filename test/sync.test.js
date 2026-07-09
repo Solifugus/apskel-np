@@ -17,9 +17,16 @@
 // the envelope; a tokenless app ignores sync entirely (sync.sql is only
 // applied when identity is).
 
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import express from "express";
 import { attachWire } from "../server/wireServer.js";
 import { createAuth } from "../server/authServer.js";
+import { loadApp, ApskelLoadError } from "../runtime/loader.js";
+import { resolveReferences } from "../runtime/pathResolver.js";
+
+const repoDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
+const fixture = (name) => path.join(repoDir, "test", "fixtures", name, "app.xml");
 
 let passed = 0;
 let failed = 0;
@@ -36,6 +43,18 @@ function check(label, condition, detail) {
 
 function eq(a, b) {
   return JSON.stringify(a) === JSON.stringify(b);
+}
+
+function expectLoadFailure(name, label, substrings) {
+  try {
+    resolveReferences(loadApp(fixture(name)));
+    check(`${name}: ${label}`, false, "loaded without error but must fail");
+  } catch (e) {
+    const ok =
+      e instanceof ApskelLoadError && substrings.every((s) => e.message.includes(s));
+    check(`${name}: ${label}`, ok, ok ? undefined : `${e.constructor.name}: ${e.message}`);
+    if (ok) console.log(`      error reads: ${e.message}`);
+  }
 }
 
 const DEVICE = "11111111-2222-3333-4444-555555555555";
@@ -246,6 +265,64 @@ console.log("\nsync — the dequeuedThrough watermark prunes receipts below it")
     !db.queries.some((q) => q.sql.startsWith("DELETE FROM sync_receipts")));
 
   server.close();
+}
+
+console.log("\nload — detect's obligations: identity to queue under, a door out of a conflict");
+{
+  // Offline writes require the identity machinery, per RESOLVED (offline
+  // writes require the identity machinery): detect/lww on a context whose
+  // table is an insert target, in a tokenless app, is a load error.
+  expectLoadFailure("fail-detect-noauth", "detect + insert target + no identity is a load error", [
+    "conflict=\"detect\"",
+    "messages",
+    "identity",
+  ]);
+
+  // The not-mounted floor, per RESOLVED (the conflict prompt is a
+  // framework composite): detect anywhere requires a region read AND a
+  // resolution-function call site — both load-bound, so the check is
+  // mechanical.
+  expectLoadFailure("fail-detect-no-prompt", "detect with no app.sync.* read is a load error", [
+    "conflict=\"detect\"",
+    "app.sync",
+    "conflict-prompt",
+  ]);
+
+  // Visibility alone is insufficient: a status bar reading pending with
+  // no keepMine/takeTheirs is the silent-parking machine the error
+  // exists to prevent.
+  expectLoadFailure("fail-detect-prompt-no-verb", "a region read without a resolution verb is a load error", [
+    "resolution",
+    "apskel.sync",
+  ]);
+
+  // 'sync' joins 'identity' as a reserved top-level name.
+  expectLoadFailure("fail-sync-reserved", "'sync' is reserved as a top-level component name", [
+    "sync",
+    "reserved",
+  ]);
+
+  // The passing shape: the shipped composite mounted as-is satisfies
+  // both obligations — its region reads and its two verbs are ordinary
+  // load-bound sites.
+  try {
+    const root = resolveReferences(loadApp(fixture("conflict-prompt-mount")));
+    check("conflict-prompt-mount: the shipped composite satisfies detect's obligations", true);
+    const verbs = root.allRefs.filter(
+      (s) => s.binding?.kind === "function" && s.binding.name.startsWith("apskel.sync.")
+    );
+    check("both resolution verbs bind as ordinary function sites", verbs.length === 2,
+      `${verbs.length} apskel.sync.* sites`);
+    const reads = root.allRefs.filter(
+      (s) => s.binding?.kind === "absolute" && (s.binding.field ?? "").startsWith("sync.")
+    );
+    check("the region reads bind as ordinary absolute sites", reads.length >= 4,
+      `${reads.length} app.sync.* sites`);
+  } catch (e) {
+    check("conflict-prompt-mount: the shipped composite satisfies detect's obligations", false, e.message);
+    check("both resolution verbs bind as ordinary function sites", false, "load failed");
+    check("the region reads bind as ordinary absolute sites", false, "load failed");
+  }
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

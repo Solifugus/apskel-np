@@ -1,0 +1,22 @@
+<app title="Detect Without Identity" version="0.1">
+
+    <client>
+
+        {draft = ""}
+
+        <board type="layout" orient="vertical" table="messages" order=".id desc">
+            {.body}
+        </board>
+
+        <composer type="layout" orient="horizontal">
+            <bodyInput type="text-input" field="draft"/>
+            <send type="button" action="apskel.data.create(&quot;messages&quot;, &quot;body&quot;, draft)">Send</send>
+        </composer>
+
+        <editor type="layout" orient="vertical" table="messages" record="1" conflict="detect">
+            <bodyEdit type="text-input" field=".body"/>
+        </editor>
+
+    </client>
+
+</app>

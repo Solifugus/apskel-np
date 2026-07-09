@@ -1,0 +1,13 @@
+<app title="Detect With No Door Out" version="0.1">
+
+    <client>
+
+        <login type="login"/>
+
+        <editor type="layout" orient="vertical" table="notes" record="1" conflict="detect">
+            <titleInput type="text-input" field=".title"/>
+        </editor>
+
+    </client>
+
+</app>

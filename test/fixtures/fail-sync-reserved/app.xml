@@ -1,0 +1,11 @@
+<app title="Sync Is Reserved" version="0.1">
+
+    <client>
+
+        <sync type="layout" orient="vertical">
+            hello
+        </sync>
+
+    </client>
+
+</app>

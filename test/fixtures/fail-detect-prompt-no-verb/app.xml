@@ -1,0 +1,17 @@
+<app title="Detect With A Status Bar But No Verbs" version="0.1">
+
+    <client>
+
+        <login type="login"/>
+
+        <statusBar type="layout" orient="horizontal">
+            {app.sync.conflict.pending}
+        </statusBar>
+
+        <editor type="layout" orient="vertical" table="notes" record="1" conflict="detect">
+            <titleInput type="text-input" field=".title"/>
+        </editor>
+
+    </client>
+
+</app>

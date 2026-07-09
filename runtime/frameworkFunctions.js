@@ -24,6 +24,13 @@ export const FRAMEWORK_FUNCTION_NAMES = new Set([
   // Both are supplied by the boot's wire block.
   "apskel.data.create",
   "apskel.data.remove",
+  // Conflict resolution, per RESOLVED (every tab may prompt; resolution
+  // binds to the seen conflict): argless on the XML surface — the
+  // implementation captures the conflict identity from the calling tab's
+  // app.sync.* region at click time and acts on THAT conflict under a
+  // short-lived lock. Supplied by the boot's sync block (Phase 10.2).
+  "apskel.sync.keepMine",
+  "apskel.sync.takeTheirs",
 ]);
 
 // deps:

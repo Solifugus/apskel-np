@@ -1,0 +1,15 @@
+<app title="Detect Done Right" version="0.1">
+
+    <client>
+
+        <login type="login"/>
+
+        <editor type="layout" orient="vertical" table="notes" record="1" conflict="detect">
+            <titleInput type="text-input" field=".title"/>
+        </editor>
+
+        <prompt type="conflict-prompt"/>
+
+    </client>
+
+</app>

@@ -888,3 +888,37 @@ the error in the terminal. Cleanup: `DROP TABLE IF EXISTS sb_tags CASCADE;`
   reader's view-mode rich-text; `collectSelectOptions` names the
   `tags.id->tags.name` source; the reader body site is not an input
   under its query-sourced context.
+
+## Phase 10.2 fixtures (design session 7: offline queue, resync, the detect prompt)
+
+Load fixtures, run by `node test/sync.test.js` (the server-side receipt
+behavior is in the same harness against a fake db; the queue's pure
+logic has its own harness, `node test/queue.test.js`, with no fixture
+apps — its fixtures are inline data).
+
+* `fail-detect-noauth/` — a tokenless app (no `apskel.auth.*` anywhere)
+  with a `messages` collection + composer (making `messages` an insert
+  target) and a record context declaring `conflict="detect"` on that
+  table. Fails at load: offline writes require the identity machinery —
+  there is no device to anchor insert receipts to, so a tokenless app
+  is offline-readonly for writes, per RESOLVED (offline writes require
+  the identity machinery).
+* `fail-detect-no-prompt/` — an auth app with `conflict="detect"` and
+  no reference site reading `app.sync.*`. Fails at load naming the
+  detect context and pointing at the shipped `conflict-prompt`
+  composite: a conflict would park forever with no prompt, per
+  RESOLVED (the conflict prompt is a framework composite over a
+  reserved region).
+* `fail-detect-prompt-no-verb/` — same, but a status bar reads
+  `{app.sync.conflict.pending}`; still no `apskel.sync.keepMine()` /
+  `takeTheirs()` call site. Fails at load: visibility alone is
+  insufficient — the silent-parking machine with no door out.
+* `fail-sync-reserved/` — a top-level component named `sync`. Fails at
+  load: `sync` joins `identity` as a reserved top-level name;
+  `app.sync.*` is the framework conflict region.
+* `conflict-prompt-mount/` — the passing shape: an auth app with
+  `conflict="detect"` mounting the shipped `<prompt
+  type="conflict-prompt"/>` as-is. Loads; the composite's two verbs
+  bind as ordinary function sites and its region reads as ordinary
+  absolute sites — the litmus test held (pure XML over a specified
+  region plus framework functions, no bespoke JS).

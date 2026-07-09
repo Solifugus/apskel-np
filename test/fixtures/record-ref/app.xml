@@ -12,6 +12,8 @@
             <noteInput type="text-input" field=".title"/>
         </fixed>
 
+        <prompt type="conflict-prompt"/>
+
     </client>
 
 </app>
