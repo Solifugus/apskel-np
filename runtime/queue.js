@@ -10,14 +10,18 @@
 // value signs. An app is allowed to store a genuinely negative integer.
 //   { fkColumns: { table: { column: referencedTable } },
 //     edges:     { table: { edge: targetTable } } }
-export function createQueue({ bindings = {}, log } = {}) {
+export function createQueue({ bindings = {}, log, restore } = {}) {
   const fkColumns = bindings.fkColumns ?? {};
   const edges = bindings.edges ?? {};
 
-  let nextSeq = 1;
-  let tempCounter = 0;
-  const entries = []; // { seq, envelope, conflict, tempId? } in seq order
-  const dead = []; // moved, never deleted — dies-loudly is the house rule
+  // restore: a prior snapshot() — the IndexedDB adapter hydrates the
+  // durable queue through this at boot. Counters resume where they
+  // stopped: seq is never reused (the idempotency key depends on it)
+  // and temp ids never collide across restarts.
+  let nextSeq = restore?.nextSeq ?? 1;
+  let tempCounter = restore?.tempCounter ?? 0;
+  const entries = [...(restore?.entries ?? [])]; // { seq, envelope, conflict, tempId? } in seq order
+  const dead = [...(restore?.dead ?? [])]; // moved, never deleted — dies-loudly is the house rule
   const live = new Map(); // tempId → { realId, table } — the translation mapping
 
   // --- translation and rewrite share one recognizer ------------------
@@ -269,7 +273,20 @@ export function createQueue({ bindings = {}, log } = {}) {
     return true;
   }
 
+  // Everything the durable adapter must persist to rebuild this queue.
+  // The live mapping is deliberately absent: its lifetime is the heal
+  // window of one page's [T] instances, which do not survive a reload.
+  function snapshot() {
+    return {
+      nextSeq,
+      tempCounter,
+      entries: entries.map((e) => ({ ...e, envelope: { ...e.envelope } })),
+      dead: dead.map((e) => ({ ...e, envelope: { ...e.envelope } })),
+    };
+  }
+
   return {
+    snapshot,
     allocTempId,
     enqueue,
     ack,

@@ -197,13 +197,16 @@ if (bundle.wire) {
           return;
         }
         if (r.status === 409) {
-          // Revision mismatch (conflict=detect): v0.1 logs, no prompt.
-          // Adopt the server's revision so the next write recovers.
+          // Revision mismatch (conflict=detect): detect graduates from
+          // log-only to the prompt (Phase 10.2) — the rejected write is
+          // captured into the queue with its stale baseRevision, so the
+          // resync pull derives it into app.sync.* and the prompt shows.
           const body = await r.json().catch(() => null);
           if (typeof body?.currentRevision === "number") {
             revisions.set(`${envelope.table}:${envelope.id}`, body.currentRevision);
           }
           console.warn("[apskel] write conflicted (revision mismatch):", envelope, body);
+          if (sync.capture(envelope)) sync.resync();
           return;
         }
         if (!r.ok) {
@@ -213,7 +216,11 @@ if (bundle.wire) {
           console.error("[apskel] wire send rejected:", r.status, body?.error ?? "");
         }
       } catch (e) {
-        console.error("[apskel] wire send failed:", e);
+        // Network failure: we are offline. The write queues durably and
+        // flushes on reconnect — or is refused per the context's policy.
+        if (!sync.capture(envelope)) {
+          console.error("[apskel] wire send failed (not queued):", e);
+        }
       }
     },
   });
@@ -243,8 +250,18 @@ if (bundle.wire) {
   functions["apskel.data.create"] = async (table, ...pairs) => {
     const values = {};
     for (let i = 0; i + 1 < pairs.length; i += 2) values[pairs[i]] = pairs[i + 1];
-    const resp = await call({ type: "apskel.data.insert", table, values, sourceClient: clientId });
-    if (!resp?.ok) console.warn("[apskel] insert rejected:", resp?.error);
+    const envelope = { type: "apskel.data.insert", table, values, sourceClient: clientId };
+    try {
+      const resp = await call(envelope);
+      if (!resp?.ok) console.warn("[apskel] insert rejected:", resp?.error);
+    } catch {
+      // Offline: the insert queues (no optimistic instance in v0.1 — the
+      // row appears at reconnect through the broadcast path) and flushes
+      // with its idempotency key.
+      if (!sync.capture(envelope)) {
+        console.warn("[apskel] offline insert refused: no queueable context on", table);
+      }
+    }
   };
   functions["apskel.data.remove"] = async (table, id) => {
     const resp = await call({ type: "apskel.data.delete", table, id, sourceClient: clientId });
@@ -308,6 +325,32 @@ if (bundle.wire) {
       }
     }
   }
+  // --- the offline queue (Phase 10.2, design session 7) --------------------
+  // Durable queue + boot overlay + Web Locks flush leadership + the
+  // app.sync.* derivation and its two resolution verbs. Tokenless apps
+  // get the no-op surface: offline-readonly for writes.
+  const { attachSync } = await import("/runtime/syncClient.js");
+  const sync = await attachSync({
+    store,
+    bound: bundle.bound,
+    bundle,
+    postWire,
+    remint: async () => {
+      if (!credentials) return false;
+      const minted = await call({ type: "apskel.auth.token", ...credentials() });
+      if (minted?.ok) token = minted.token;
+      return !!minted?.ok;
+    },
+    credentials,
+    revisions,
+  });
+  Object.assign(functions, sync.functions);
+  // Boot ordering per RESOLVED (the replay origin): the queue overlay
+  // repaints pending edits through the replay door AFTER binding and
+  // initial state, BEFORE the connection — the wire watchers stay quiet.
+  sync.bootOverlay();
+  window.addEventListener("online", () => sync.resync());
+
   // EventSource cannot set headers: the token rides the query string, and
   // the connection's identity is fixed at connect — so a token change
   // (login) reconnects, per RESOLVED (broadcasts obey read rules).
@@ -316,6 +359,9 @@ if (bundle.wire) {
     events?.close();
     const url = bundle.wire.events + (token ? `?token=${encodeURIComponent(token)}` : "");
     events = new EventSource(url);
+    // A (re)opened feed is the reconnect signal: resync — pull, reconcile,
+    // flush clean lineages under the flush lock, surface any conflicts.
+    events.onopen = () => sync.resync();
     events.onmessage = (e) => {
       const envelope = JSON.parse(e.data);
       handleEvent(envelope);
@@ -324,6 +370,7 @@ if (bundle.wire) {
   };
   reconnectEvents();
   window.__apskel.clientId = clientId;
+  window.__apskel.sync = sync;
 }
 
 // --- URL <-> state sync (after mount; seeds never fire watchers) -----------

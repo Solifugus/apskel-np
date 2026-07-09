@@ -24,7 +24,15 @@ export class ApskelStoreError extends Error {
   }
 }
 
-export const ORIGINS = ["user", "server", "system"];
+// Four origins, each minted by exactly one gatekeeper, per the amended
+// RESOLVED (origins): 'user' by ctx.input, 'server' by the Wire receive
+// path (applyServerWrite), 'replay' by the boot overlay
+// (applyReplayWrite), 'system' by everything else. 'replay' exists
+// because queued-but-unacknowledged values must repaint at boot without
+// re-enqueueing — and smuggling them through 'server' would make the
+// origin taxonomy a lie at the exact moment (conflict resolution) it
+// must be trustworthy.
+export const ORIGINS = ["user", "server", "system", "replay"];
 
 export function createStore() {
   const values = new Map();
@@ -49,6 +57,13 @@ export function createStore() {
             `not be forgeable by app code`
         );
       }
+      if (origin === "replay") {
+        throw new ApskelStoreError(
+          `origin 'replay' on set of '${path}' is reserved to the boot overlay ` +
+            `(use applyReplayWrite); the wire watchers trust this origin the same ` +
+            `way they trust 'server', and it must not be forgeable by app code`
+        );
+      }
       if (!ORIGINS.includes(origin)) {
         throw new ApskelStoreError(
           `unknown origin '${origin}' on set of '${path}' (expected ${ORIGINS.join("/")})`
@@ -61,6 +76,13 @@ export function createStore() {
     // origin-'server' changes.
     applyServerWrite(path, value) {
       return write(path, value, "server");
+    },
+
+    // The boot overlay's door: queued-but-unacknowledged values repaint
+    // through here — suppressed by the wire watchers exactly as 'server'
+    // is, distinguishable from it, minted only by boot.
+    applyReplayWrite(path, value) {
+      return write(path, value, "replay");
     },
 
     // Silent write: no listeners, no cascade. Used for initialization that

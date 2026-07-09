@@ -15,6 +15,8 @@
 // (Q3). Expected outcomes are the design doc's Phase 10.2 block.
 
 import { createQueue, deriveConflict } from "../runtime/queue.js";
+import { createStore, ApskelStoreError } from "../runtime/store.js";
+import { WatcherEngine } from "../runtime/watchers.js";
 
 let passed = 0;
 let failed = 0;
@@ -287,6 +289,55 @@ console.log("\nqueue — ack, watermark, dead-letter");
   check("the dead-lettered payload is recoverable, not deleted",
     dead.length === 1 && dead[0].envelope.value === "y");
   check("with the queue drained, the watermark passes everything", q.dequeuedThrough() > c.seq);
+}
+
+console.log("\nqueue — snapshot and restore: the durable adapter's contract");
+{
+  const q = createQueue({ bindings: BINDINGS });
+  q.allocTempId();
+  q.enqueue(set("article_editions", 7, "body", "survives reload", 3), { conflict: "detect" });
+  const b = q.enqueue(set("article_editions", 8, "body", "dies as 400", 3), { conflict: "detect" });
+  q.deadLetter(b.seq);
+
+  const q2 = createQueue({ bindings: BINDINGS, restore: q.snapshot() });
+  check("entries survive the round trip", q2.entries().length === 1 &&
+    q2.entries()[0].envelope.value === "survives reload");
+  check("the dead-letter survives too", q2.deadLetters().length === 1);
+  check("seq resumes, never reused (the idempotency key depends on it)",
+    q2.enqueue(set("tags", 1, "name", "x", 1), { conflict: "detect" }).seq === 3);
+  check("temp ids resume, never colliding across restarts", q2.allocTempId() === -2);
+}
+
+console.log("\nstore — the replay origin: minted only by the boot overlay, suppressed like server");
+{
+  const store = createStore();
+  let threw = null;
+  try {
+    store.set("app.doc.body", "forged", "replay");
+  } catch (e) {
+    threw = e;
+  }
+  check("ordinary set rejects origin 'replay' as unforgeable",
+    threw instanceof ApskelStoreError && threw.message.includes("applyReplayWrite"));
+
+  const engine = new WatcherEngine(store);
+  const origins = [];
+  store.onChange((c) => origins.push(c.origin));
+  let wireFired = 0;
+  engine.watch({
+    name: "wire:app.doc.body",
+    fields: ["app.doc.body"],
+    skipOrigins: ["server", "replay"],
+    run: () => { wireFired += 1; },
+  });
+  store.applyReplayWrite("app.doc.body", "queued value, repainted at boot");
+  check("applyReplayWrite applies and stamps origin 'replay'", origins[0] === "replay" &&
+    store.get("app.doc.body") === "queued value, repainted at boot");
+  check("the wire watcher stays quiet on replay — the overlay never re-enqueues", wireFired === 0);
+  store.applyServerWrite("app.doc.body", "server truth");
+  check("...and quiet on server, distinguishably", wireFired === 0 && origins[1] === "server");
+  store.set("app.doc.body", "a keystroke", "user");
+  check("a user write still fires it", wireFired === 1);
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

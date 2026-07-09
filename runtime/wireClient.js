@@ -50,7 +50,7 @@ export function attachWireSend({
     engine.watch({
       name: `wire:${s.storePath}`,
       fields: [s.storePath],
-      skipOrigins: ["server"],
+      skipOrigins: ["server", "replay"],
       run: (ctx) => {
         const id = s.recordPath ? ctx.get(s.recordPath) : s.record;
         if (s.recordPath && emptyId(id)) return; // empty context: sends suppressed
@@ -73,7 +73,7 @@ export function attachWireSend({
       // Never echo a server change back out — suppressed at the engine, so
       // the fire counter proves it (criterion 5), rather than an early
       // return hiding inside this body.
-      skipOrigins: ["server"],
+      skipOrigins: ["server", "replay"],
       run: (ctx) => {
         // The row id is captured at keystroke time, not send time, per
         // RESOLVED (selection-change semantics).
