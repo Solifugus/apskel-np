@@ -490,13 +490,82 @@ live at store paths.
 
 ## Phase 10.2 — Offline Queue, Resync, and the detect Prompt
 
-Design session 7 first: the queue's durable local shape, the flush
-protocol, and the keep-mine/take-theirs prompt UI — the session the
-set-field lww deferral and the `sync_log` note both point at. Resync
-order is already RESOLVED (components before data): apply component/app
-updates, pull server changes, reconcile and flush the local queue —
-conflicts prompted before push. `detect` graduates from log-only to the
-prompt; the server-side `sync_log` lands here, not before.
+Implements design session 7 (complete — all five questions closed in
+the design doc's Phase 10.2 block): the durable local shape (replica +
+queue in wire vocabulary, IndexedDB per app+identity, four object
+stores), the flush protocol (lock-is-leadership, dequeue-on-ack, insert
+idempotency keys, per-lineage replay, the live temp-id translation
+mapping), the conflict prompt (a framework composite over the reserved
+`app.sync.*` region), `sync_receipts` (insert idempotency receipts
+only, low-water-mark retention), and the edge deferral (edges stay lww;
+no set-level detect). `detect` graduates from log-only to the prompt.
+Deliverables, in dependency order:
+
+* `runtime/queue.js` — the queue's pure logic, storage-agnostic (an
+  injected store; IndexedDB in the browser, in-memory in tests):
+  enqueue with coalescing (`set` per table:id:field, last value wins,
+  **first** baseRevision pinned; `setMembers` per edge, no
+  baseRevision; `insert`/`delete` never coalesce), the `conflict=`
+  queueing gate (offline-readonly refuses per the autosave-403
+  pattern), monotonic seq, negative-integer temp ids from the meta
+  counter, enqueue-time translation through the live T→R mapping,
+  the queue-only rewrite on insert ack (declared-binding recognition,
+  including setMembers members arrays), lineage partition (transitive
+  temp-id connectivity), delete-does-not-prune.
+* Reconcile + the `app.sync.*` derivation, same module or a sibling:
+  given pulled revisions, partition lineages clean/conflicted; derive
+  the head conflict (`pending`, `table`, `id`, `field`, `mine`,
+  `theirs`) from queue + replica, never duplicated state; keep-mine
+  (act-time revision pinning) and take-theirs (entry removal) as pure
+  queue operations the framework functions will call.
+* `server/sync.sql` + wireServer: the `sync_receipts` table (PK
+  `(db, device_id, seq)`), applied after `identity.sql` only when the
+  app uses auth; insert accepts an idempotency key and commits the
+  receipt in the insert's own transaction; a replayed key returns the
+  original `assigned_id` without re-inserting or re-broadcasting;
+  delete answers success on an already-missing row; the
+  `dequeuedThrough` watermark prunes receipts.
+* Load/startup errors: `conflict="detect"`/`"lww"` on a context with
+  an insert target in a tokenless app (names the missing identity
+  machinery); `conflict="detect"` anywhere without both an
+  `app.sync.*` reference site and a resolution-function call site.
+* Browser wiring: IndexedDB persistence as a deferred-effect consumer
+  at settle; the `replay` origin (engine-enforced single minter, boot
+  overlay only); boot = instantiate, bind, replica through
+  `applyServerWrite`, queue overlay through `replay`, connect, resync;
+  Web Locks flush leadership (lock covers pull → reconcile → flush
+  clean only); the shipped `conflict-prompt` composite and the
+  `apskel.sync.keepMine`/`takeTheirs` framework functions
+  (check-then-act, bound to the seen conflict).
+
+Fixtures first, expected outcomes in the README before code: DB-free —
+`test/queue.test.js` (coalescing, pinning, gate, temp ids, translation
+mapping, rewrite, lineages, reconcile/derivation, keep-mine/take-theirs
+as queue ops); load — `fail-detect-noauth`, `fail-detect-no-prompt`,
+plus a passing `conflict-prompt` mount fixture; DB — receipt
+idempotency, same-transaction commit, replayed key, idempotent delete,
+watermark prune (via `run.js` against real PostgreSQL, like the
+`startup-*` fixtures).
+
+Do NOT build yet: device revocation (no revocation event exists; the
+receipts FK is an anchor, not a cleanup), set-level detect for edges
+(deferred to a shared-mutable-set app), CRDT/merge reconciliation,
+BroadcastChannel local echo (explicitly rejected), account switching on
+a shared device, any general audit/observability log beyond
+`sync_receipts`, store-backed collection repetition for the prompt.
+
+Verification (personally): two real tabs on a `detect` draft — kill the
+server, type in both tabs, restart, and watch the leader tab flush while
+the other's edit arrives via echo; DevTools Application tab shows the
+four object stores and the queue draining on reconnect; a conflict
+staged from a second device/profile surfaces the prompt with mine/theirs
+correct, keep-mine lands my value in `psql`, take-theirs repaints
+without re-enqueueing (`__apskel.fireCounts()` shows the wire watcher
+quiet); a replayed insert (crash between ack and dequeue, simulated)
+lands exactly one row in `psql` and `sync_receipts` shows the receipt;
+`curl` an insert with a forged `@user`-style claim or a stale binding →
+400 with the entry visible in dead-letter; a tokenless app declaring
+`detect` on an insert target fails at load naming identity.
 
 ## Phase 10.3 — WorkSplicer Groundwork
 
