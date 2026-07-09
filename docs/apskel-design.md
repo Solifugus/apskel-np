@@ -2485,13 +2485,13 @@ read-only sources).
 
 **Phase 10.2 (offline queue, resync, the `detect` prompt) — design
 session 7, in progress.** Questions 1 (the queue's durable local shape),
-2 (the flush protocol), and 3 (the conflict prompt) are closed by the
-entries below. Question 4 (`sync_log`'s shape — the insert idempotency
-record with its retention rule, what a log row *is* per accepted write,
-and the explicit statement of what it cannot contain) opens next; then
-question 5 (edges under `detect`, or the recorded lww deferral renewed);
-then fixtures, then code. Nothing here is built until the session
-closes, per the standing discipline.
+2 (the flush protocol), 3 (the conflict prompt), and 4 (`sync_log`'s
+shape) are closed by the entries below. Question 5 (edges under
+`detect`, or the recorded lww deferral renewed) opens next — named
+throughout as where the invariants presently vacuous under v0.1's single
+conflict source could become load-bearing; then fixtures, then code.
+Nothing here is built until the session closes, per the standing
+discipline.
 
 RESOLVED (durable local shape: a replica plus a queue, in wire
 vocabulary): the client persists exactly two structures, with different
@@ -2594,7 +2594,12 @@ applied at enqueue (a `detect` entry carries its pinned baseRevision, an
 Anonymous queueing falls out of the same gate: a context whose rules
 permit anonymous writes queues offline exactly as it writes online;
 every other context refuses. What an anonymous queue may never do is the
-next entry.
+next entry. (Narrowed, question 4: the write menu is `users`/`owner`/
+`none`, so no rule in an *auth* app ever permits an anonymous write —
+"anonymous queueing" only ever meant a *no-auth* app's writes, and
+RESOLVED (offline writes require the identity machinery) makes those
+offline-readonly. Anonymous *offline writes* therefore do not exist in
+v0.1; anonymous offline *reads* are unaffected.)
 
 RESOLVED (the anon boundary: never merge, never reattribute): databases
 never merge across identities. Login switches databases; logout
@@ -2688,17 +2693,23 @@ already-missing row answers success, not 400 — otherwise a crash-retry
 of an already-committed delete lands in the dead-letter path as a
 spurious error. With that ruling, insert is the ONLY non-idempotent
 verb, which is exactly why idempotency keys attach only to inserts.
-Every flushed `insert` carries the key `<dbName>#<seq>` — both parts
-already durable and unique by construction; the server records key →
-result and answers a replayed key with the **original result** (the row
-id it assigned the first time) instead of inserting again. This binds
-question 4 harder than "store the key": a queue can sit offline for
-weeks, so a replayed key can arrive arbitrarily late, and idempotency
-records cannot be casually TTL'd. Question 4 decides the retention
-rule; the natural shape is retain-per-device, cleaned on device
-revocation. Coherence dividend: a crash after insert-ack but before the
-temp-id rewrite is healed by the same mechanism — the retry gets the
-same real id back and the rewrite completes.
+Every flushed `insert` carries an idempotency key; the server records
+key → result and answers a replayed key with the **original result**
+(the row id it assigned the first time) instead of inserting again. This
+binds question 4 harder than "store the key": a queue can sit offline
+for weeks, so a replayed key can arrive arbitrarily late, and
+idempotency records cannot be casually TTL'd. (The key was drafted here
+as `<dbName>#<seq>`; **corrected in question 4** — that form is
+device-ambiguous, since `seq` is a per-device-database autoincrement and
+two devices under the same identity would mint identical keys for
+different inserts. The key is the triple `(db, device_id, seq)` — see
+RESOLVED (`sync_receipts` is the idempotency record). Retention is
+resolved there too, and it is *not* the "cleaned on device revocation"
+this entry first guessed — v0.1 has no revocation event — but a
+client-advanced low-water mark.) Coherence dividend: a crash after
+insert-ack but before the temp-id rewrite is healed by the same
+mechanism — the retry gets the same real id back and the rewrite
+completes.
 
 Flushed envelopes are sent verbatim as stored, the enqueuer's
 `sourceClient` preserved — and this is a reason, not an accident: when
@@ -3003,6 +3014,124 @@ A reference sketch of the shipped `conflict-prompt` composite — labeled
 sketch, not decided; it renders against the real primitives only in the
 implementation phase — appears in the session-7 working notes, not
 inlined here as design.
+
+RESOLVED (`sync_receipts` is the idempotency record — there is no
+general `sync_log` in v0.1): the plan and the minimal-tables note both
+leave the impression the offline queue needs a *log* — a per-event
+server-side trail. Interrogated against what the machinery actually
+*reads*, it does not. Idempotency needs a durable record, but only for
+inserts (insert is the sole non-idempotent verb). Resync's "pull server
+changes" needs current state plus current revision, which
+`get`/`getMembers`/`select` already return — a change-log of *how* a
+record moved is never read. Missed broadcasts and ordering are healed by
+re-pull on reconnect; receipt order is a live property of the stream,
+and the durable truth is current-state-plus-revision, not a replayable
+event sequence. So the only durable server-side record the offline-queue
+era needs is **insert idempotency receipts**, and the table named
+`sync_log` in the plan *is* that table and nothing more. It is renamed
+**`sync_receipts`** — a table that promises a "log" but holds receipts
+is the mild falsehood this doc exists to prevent. A general
+audit/observability log is undesigned, WorkSplicer-shaped scope,
+explicitly not smuggled in here.
+
+A receipt row is written **per flushed insert** — not per accepted write
+(the idempotent verbs get none), not per flush (a flush of N inserts
+writes N rows), not per broadcast (the receipt is written at
+insert-accept, independent of downstream delivery). The load-bearing
+precision: the receipt **commits in the same database transaction as the
+INSERT it records** — otherwise a crash between insert-commit and
+receipt-write reintroduces the double-insert on retry, the exact bug the
+receipt kills. One transaction on the shared connection (the `setMembers`
+CTE discipline): claim the key; if present, return the stored
+`assigned_id` and do **not** re-insert or re-broadcast; else do the data
+INSERT, store the receipt with the returned id, commit. Replays are
+answered from the receipt, silently. Boundary, stated so it is not
+over-claimed: the receipt guarantees exactly-once for the *data insert*;
+broadcast *delivery* stays the pre-existing SSE best-effort property,
+healed by re-pull on reconnect, not strengthened here.
+
+The shape:
+
+```
+sync_receipts
+  db            text        -- apskel:<app>:<identity>
+  device_id     uuid        REFERENCES devices(id)
+  seq           bigint
+  assigned_id   bigint      -- the PK the server assigned on first insert
+  table_name    text        -- a replayed key whose table mismatches is a bug
+  created_at    timestamptz DEFAULT now()
+  PRIMARY KEY (db, device_id, seq)   -- this triple IS the idempotency key
+```
+
+The key is the natural triple `(db, device_id, seq)`, not a concatenated
+string: `db` carries app+identity, `device_id` disambiguates devices
+under one identity (the correction to question 2's device-ambiguous
+`<dbName>#<seq>`), and `seq` — the per-database autoincrement — is a
+comparable column, which the retention rule needs. **Not** stored: the
+inserted values. A receipt records the assigned id, never the payload;
+refusing the payload is what keeps this from drifting into an event
+store.
+
+RESOLVED (receipt retention: a client-advanced low-water mark, not
+revocation): a receipt must live only as long as its key could still be
+replayed, and `seq` is **monotonic and never reused** per
+device-database — the instant the client durably records the ack and
+dequeues an insert, it will never send that key again. The cleanup gives
+the server a cheap, safe view of that: the client piggybacks its
+**lowest still-unacked `seq`** (`dequeuedThrough`) on flush traffic, and
+the server opportunistically runs
+`DELETE FROM sync_receipts WHERE db=? AND device_id=? AND seq < ?`. It is
+**monotonic** (the watermark only rises, advanced only after durable
+dequeue — no races, no ordering requirement), **degrades to lingering,
+never to wrong** (a lost or stale watermark leaves receipts un-pruned a
+while longer; nothing replayable is ever deleted), and **bounds the
+table to outstanding un-acked inserts** (online the watermark advances
+moments after each ack, so receipts live seconds; offline-accumulated
+ones clear on the next reconnect). Cost: one integer on traffic already
+being sent, one indexed delete. Accepted residue: a device that stops
+inserting leaves its final batch lingering (no later traffic to carry an
+advanced watermark) — bounded and safe, cleared if it ever returns. This
+replaces the "cleaned on device revocation" that question 2 guessed:
+v0.1 has **no revocation event** (the SSE entry defers revocation
+entirely), so a cascade-on-revocation would never fire and receipts
+would grow unbounded — one row per offline-capable insert, forever,
+which for a real Knowledge Foyer deployment is a genuine liability, not
+a shrug. The `REFERENCES devices(id)` in the shape stays as a
+correctness anchor and as the trigger a future revocation session would
+cash; it is not the v0.1 cleanup.
+
+RESOLVED (offline writes require the identity machinery): the receipt's
+retention anchor and the whole offline-write path lean on the `devices`
+row, which exists only in auth apps (`server/identity.sql`). Followed to
+its conclusion: a no-auth (tokenless) app has no device row, no
+per-device `seq` namespace, and no place to anchor receipts — so
+**offline write queueing requires identity.** A no-auth app is
+**offline-readonly for writes**: declaring `conflict="detect"` or
+`"lww"` on a context that has an insert target in a tokenless app is a
+load/startup error naming the missing identity machinery.
+`sync_receipts` therefore lives in framework core SQL applied only when
+identity is present — its own `server/sync.sql`, after `identity.sql`,
+before the app schema — so the table's existence and its retention
+anchor are the *same condition*. This does **not** touch `board-demo`
+(no-auth, default `offline-readonly`, *online* inserts — no queue, no
+receipt, no double-insert risk); it forbids only a hypothetical no-auth
+app that wants *offline* writes. A real capability cut, recorded as one.
+It also retires question 1's "anonymous queueing" to its true scope, per
+the amendment folded into RESOLVED (`conflict=` is the queueing gate):
+no rule ever permits an authenticated-app anonymous write, so anonymous
+queueing only ever meant a no-auth app's writes, which this makes
+offline-readonly — anonymous offline *reads* are unaffected.
+
+RESOLVED (what `sync_receipts` cannot contain): a hard boundary so the
+table's shape cannot drift, per the question-3 pointer. It holds no
+**client-side resolutions** — the server never sees a take-theirs (the
+queued write is simply never sent) and a keep-mine arrives as an
+ordinary `set` it cannot distinguish, so there is no column for either;
+the log's shape must not grow a client-resolution table by drift. It
+holds no **write payloads or field values** — the assigned id, never the
+data. And it holds no **non-insert verbs** — `set`/`setMembers`/`delete`
+are idempotent and receipted never. A receipt is an idempotency record,
+not an event store, and these three exclusions are what hold it to that.
 
 ---
 
