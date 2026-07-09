@@ -2484,14 +2484,14 @@ and stay illegal there, per RESOLVED (named queries are declared,
 read-only sources).
 
 **Phase 10.2 (offline queue, resync, the `detect` prompt) — design
-session 7, in progress.** Questions 1 (the queue's durable local shape),
-2 (the flush protocol), 3 (the conflict prompt), and 4 (`sync_log`'s
-shape) are closed by the entries below. Question 5 (edges under
-`detect`, or the recorded lww deferral renewed) opens next — named
-throughout as where the invariants presently vacuous under v0.1's single
-conflict source could become load-bearing; then fixtures, then code.
-Nothing here is built until the session closes, per the standing
-discipline.
+session 7, in progress.** **Design session 7 is complete** — all five questions are closed by the
+entries below: 1 (the queue's durable local shape), 2 (the flush
+protocol), 3 (the conflict prompt), 4 (`sync_receipts`), and 5 (edges
+stay `lww`, the `detect` story deferred to a shared-mutable-set app).
+The invariants marked presently vacuous under v0.1's single conflict
+source stay dormant until that deferral is cashed. Phase 10.2 now
+proceeds: fixtures written before code, then implementation, then the
+developer's own verification.
 
 RESOLVED (durable local shape: a replica plus a queue, in wire
 vocabulary): the client persists exactly two structures, with different
@@ -3132,6 +3132,40 @@ holds no **write payloads or field values** — the assigned id, never the
 data. And it holds no **non-insert verbs** — `set`/`setMembers`/`delete`
 are idempotent and receipted never. A receipt is an idempotency record,
 not an event store, and these three exclusions are what hold it to that.
+
+RESOLVED (edges stay `lww` at the set level; the `detect` story is
+deferred, not renewed under duress): an edge — a multi-value field such
+as an article's tag set — is written as a whole-set replace and, by the
+question-2 coalescing rule, carries no `baseRevision`. Giving edges a
+`detect` conflict story therefore means inventing per-set revision
+tracking from scratch — the machinery single fields get for free from
+their `revision` column, edges do not have. Weighed against the need:
+Knowledge Foyer's tags are single-author, so a two-device simultaneous
+tag-set collision is a corner of a corner, and its failure mode is a
+stale set losing to a newer one — not the disappearance of authored
+prose. So edges **stay `lww` at the set level** and prompt nothing; the
+recorded lww-at-set-level deferral is **renewed with its reason**, not
+merely carried. This keeps the three invariants that name question 5 as
+their trigger — transitive parking, clean-remainder flush, and
+offline-born-can't-conflict — **presently vacuous**: v0.1's single
+conflict source stays "a `detect` `set` on a real, server-existing row,"
+and nothing about edges adds a second.
+
+Recorded revisit, named rather than vague: the door reopens when an app
+has a **genuinely shared mutable set** — WorkSplicer's task
+assignments/labels, where two people editing one set concurrently is the
+normal case, not a corner. That is the phase to design set-level
+revisions (or a CRDT-ish merge, the richer reconciliation the offline
+model already defers to the WorkSplicer era), and the phase where the
+three vacuous invariants would finally fire. Until an app needs it, the
+cost of building it now is real and the benefit is zero.
+
+**Design session 7 is complete.** Questions 1–5 are closed above; the
+offline queue, its flush protocol, the conflict prompt, `sync_receipts`,
+and the edge deferral are all resolved. Phase 10.2 now proceeds under the
+standing discipline: **fixtures written before code**, then the
+implementation, then the developer's own verification (rows in `psql`,
+two real tabs, forbidden writes via `curl`).
 
 ---
 
