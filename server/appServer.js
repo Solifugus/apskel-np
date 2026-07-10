@@ -2,6 +2,7 @@
 // tools/serve.js (Wire-less, Phase 3) and tools/run.js (Wire + PostgreSQL,
 // Phase 4).
 
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import express from "express";
@@ -12,7 +13,15 @@ const repoDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 // database on every page load (reload shows the draft as left).
 export function createAppServer({ appDir, bundleProvider }) {
   const app = express();
-  app.locals.apskelShell = (req, res, next) => sendShell(bundleProvider, res, next);
+  // Structural CSS is optional per primitive: link only what exists (the
+  // app's override dir first, then the framework's), so a css-less
+  // primitive doesn't 404 the shell into MIME warnings.
+  const hasStructureCss = (t) =>
+    [appDir, repoDir].some((d) =>
+      fs.existsSync(path.join(d, "components", "primitives", t, "structure.css"))
+    );
+  app.locals.apskelShell = (req, res, next) =>
+    sendShell(bundleProvider, res, next, hasStructureCss);
 
   app.get("/app.json", async (req, res, next) => {
     try {
@@ -42,13 +51,13 @@ export function attachShellFallback(app) {
   });
 }
 
-async function sendShell(bundleProvider, res, next) {
+async function sendShell(bundleProvider, res, next, hasStructureCss = () => true) {
   try {
     const bundle = await bundleProvider();
     const cssLinks = [
-      ...bundle.primitiveTypes.map(
-        (t) => `<link rel="stylesheet" href="/primitives/${t}/structure.css">`
-      ),
+      ...bundle.primitiveTypes
+        .filter(hasStructureCss)
+        .map((t) => `<link rel="stylesheet" href="/primitives/${t}/structure.css">`),
       ...(bundle.style ? [`<link rel="stylesheet" href="/app/${bundle.style}">`] : []),
     ].join("\n    ");
     res.type("html").send(`<!doctype html>
