@@ -2173,6 +2173,27 @@ per binding (AND-composition deferred), and `filter=` is legal only on
 **table** sources — a query owns its own WHERE. Column existence is a
 startup check, per the error taxonomy.
 
+RESOLVED (empty reference values are the empty context, everywhere a
+reference parameterizes a fetch): `record=`'s rule — a null/undefined/`""`
+selection is an empty context — extends verbatim to the other two places
+a reference value reaches SQL: a dynamic `filter=` item and a query call
+argument. An empty value can never address a row, so nothing is asked.
+Client-side, a query source with any empty argument, or a filter whose
+match set is all-empty references (no literals to carry it), clears its
+collection without a round trip — the same String-compare that already
+makes `""` match no broadcast locally; a filter mixing literals with an
+empty reference still fetches on the literals. Server-side the doors
+harden to match, as policy rather than accident: `apskel.data.select`
+drops empty values from a filter's match set (answering `rows: []` when
+the set empties) and answers `rows: []` when any query parameter is
+empty (the query wrap's single-row lookup answers its 404 alike); the
+guarded single-row doors (`get`/`set`/`delete`, and the query wrap's
+`id`) treat an empty id as a missing id — 400, never a type error
+surfacing as a 500. `@user` is never empty by construction (401 precedes
+the fill). The deliberate cost, stated: a query cannot give `""` a
+meaning ("empty search means all rows") — a parameter is a selection
+value in v0.1; a query wanting show-all semantics takes no parameter.
+
 RESOLVED (`order=` and `limit=` closed forms): `order=".created_at desc"`
 — one column reference plus optional `asc`/`desc` (default `asc`), one
 column in v0.1; `limit="50"` — integer literal only. Both compose onto

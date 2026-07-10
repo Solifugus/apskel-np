@@ -24,7 +24,7 @@ import {
 } from "../runtime/serialize.js";
 import { createStore } from "../runtime/store.js";
 import { WatcherEngine } from "../runtime/watchers.js";
-import { attachCollectionSync } from "../runtime/wireClient.js";
+import { attachCollectionSync, attachRecordContexts } from "../runtime/wireClient.js";
 import { remapInstance } from "../runtime/binder.js";
 import {
   attachWire,
@@ -309,11 +309,13 @@ console.log("\nserver — select composition, insert stamping, delete guard");
 {
   const queriesResolved = [
     { name: "publishedEditions", params: [], tables: ["articles", "article_editions"], read: "public", sql: "SELECT e.id, e.title, e.created_at FROM article_editions e", fields: ["id", "title", "created_at"] },
+    { name: "byTag", params: ["tag"], tables: ["articles"], read: "public", sql: "SELECT a.id, a.title FROM articles a WHERE a.tag = $1", fields: ["id", "title"] },
   ];
   const colls = [
     { path: "app.published", table: null, query: { name: "publishedEditions", args: [] }, filter: null, order: { column: "created_at", dir: "desc" }, limit: 10, columns: ["title"] },
     { path: "app.mine", table: "articles", query: null, filter: { column: "created_by", items: [{ kind: "ref", storePath: "app.identity.userId" }] }, order: { column: "id", dir: "asc" }, limit: null, columns: ["id", "title"] },
     { path: "app.board", table: "messages", query: null, filter: null, order: { column: "id", dir: "desc" }, limit: 20, columns: ["body", "id"] },
+    { path: "app.tagged", table: null, query: { name: "byTag", args: [{ kind: "ref", storePath: "app.tag" }] }, filter: null, order: null, limit: null, columns: ["title"] },
   ];
   const queries = [];
   const fakeDb = {
@@ -333,7 +335,7 @@ console.log("\nserver — select composition, insert stamping, delete guard");
   const app = express();
   attachWire(app, {
     db: fakeDb,
-    bound: [],
+    bound: [{ table: "articles", field: "title", conflict: "offline-readonly" }],
     auth,
     permissions,
     collections: colls,
@@ -381,6 +383,41 @@ console.log("\nserver — select composition, insert stamping, delete guard");
 
   const unknown = await post({ type: "apskel.data.select", path: "app.nope" });
   check("an undeclared collection path -> 400", unknown.status === 400);
+
+  // Empty reference values are the empty context, per RESOLVED (empty
+  // reference values are the empty context): the door answers empty, SQL
+  // never sees a value that cannot address a row.
+  queries.length = 0;
+  const mineEmpty = await post(
+    { type: "apskel.data.select", path: "app.mine", filterValues: [""] },
+    tokenFor(7)
+  );
+  const mineEmptyBody = await mineEmpty.json();
+  check(
+    "an empty filter value empties the match set: rows [], SQL untouched",
+    mineEmpty.status === 200 && eq(mineEmptyBody.rows, []) && queries.length === 0,
+    JSON.stringify({ status: mineEmpty.status, body: mineEmptyBody, queries })
+  );
+
+  queries.length = 0;
+  const tagEmpty = await post({ type: "apskel.data.select", path: "app.tagged", params: [""] });
+  const tagEmptyBody = await tagEmpty.json();
+  check(
+    "an empty query parameter answers rows [] without running the query",
+    tagEmpty.status === 200 && eq(tagEmptyBody.rows, []) && queries.length === 0,
+    JSON.stringify({ status: tagEmpty.status, body: tagEmptyBody, queries })
+  );
+
+  const getEmptyId = await post(
+    { type: "apskel.data.get", table: "articles", id: "", field: "title" },
+    tokenFor(7)
+  );
+  const getEmptyIdBody = await getEmptyId.json();
+  check(
+    "an empty id on the guarded get is a missing id -> 400, never a 500",
+    getEmptyId.status === 400 && getEmptyIdBody.error === "missing id",
+    JSON.stringify(getEmptyIdBody)
+  );
 
   queries.length = 0;
   const ins = await post(
@@ -509,6 +546,123 @@ console.log("\nsync — membership maintained from broadcasts through the contro
   sync.handleEvent({ type: "apskel.data.changed", table: "article_editions", id: 3, field: "title", value: "t" });
   await new Promise((r) => setTimeout(r, 10));
   check("a broadcast naming a query's tables= re-fetches the query collection", selects === beforeQ + 1);
+}
+
+// ---------------------------------------------------------------------------
+console.log("\nsync — empty reference values suppress the fetch (the empty context extends)");
+
+{
+  const store = createStore();
+  const engine = new WatcherEngine(store);
+  const tick = () => new Promise((r) => setTimeout(r, 0));
+  const actions = [];
+  const makeCtrl = (path) => ({
+    has: () => false,
+    instantiate: (id) => actions.push([path, "instantiate", id]),
+    destroy: (id) => actions.push([path, "destroy", id]),
+    clear: () => actions.push([path, "clear"]),
+  });
+  const controllers = new Map([
+    ["app.byTag", makeCtrl("app.byTag")],
+    ["app.mineList", makeCtrl("app.mineList")],
+    ["app.openOrMine", makeCtrl("app.openOrMine")],
+  ]);
+  const colls = [
+    { path: "app.byTag", table: null, query: { name: "byTag", args: [{ kind: "ref", storePath: "app.tag" }] }, filter: null, order: null, limit: null, columns: ["title"] },
+    { path: "app.mineList", table: "articles", query: null, filter: { column: "created_by", items: [{ kind: "ref", storePath: "app.who" }] }, order: null, limit: null, columns: ["title"] },
+    // A literal keeps the match set alive: the empty ref drops out, the fetch proceeds.
+    { path: "app.openOrMine", table: "articles", query: null, filter: { column: "status", items: [{ kind: "literal", value: "open" }, { kind: "ref", storePath: "app.who" }] }, order: null, limit: null, columns: ["title"] },
+  ];
+  const clientQueries = [{ name: "byTag", params: ["tag"], tables: ["articles"], read: "public" }];
+  const selects = [];
+  const call = async (env) => {
+    selects.push(env);
+    return { ok: true, rows: [{ id: 1, title: "T" }] };
+  };
+
+  const sync = attachCollectionSync({ engine, store, collections: colls, queries: clientQueries, controllers, call });
+  await sync.ready;
+
+  check(
+    "an empty query arg and an all-empty filter fetch nothing; the mixed literal filter still fetches",
+    selects.length === 1 && selects[0].path === "app.openOrMine",
+    JSON.stringify(selects.map((s) => s.path))
+  );
+  check(
+    "the suppressed collections cleared instead of erroring",
+    actions.some((a) => a[0] === "app.byTag" && a[1] === "clear") &&
+      actions.some((a) => a[0] === "app.mineList" && a[1] === "clear"),
+    JSON.stringify(actions)
+  );
+
+  selects.length = 0;
+  store.set("app.tag", "news", "system");
+  await tick();
+  check(
+    "the reference gaining a value re-runs the fetch with it",
+    selects.length === 1 && selects[0].path === "app.byTag" && eq(selects[0].params, ["news"]),
+    JSON.stringify(selects)
+  );
+
+  selects.length = 0;
+  store.set("app.tag", "", "system");
+  await tick();
+  check(
+    "the reference emptying again clears without a round trip",
+    selects.length === 0 && actions[actions.length - 1][0] === "app.byTag" && actions[actions.length - 1][1] === "clear",
+    JSON.stringify({ selects, tail: actions.slice(-2) })
+  );
+}
+
+// ---------------------------------------------------------------------------
+console.log("\nsync — query-record contexts load through the query wrap");
+
+{
+  const store = createStore();
+  const engine = new WatcherEngine(store);
+  const tick = () => new Promise((r) => setTimeout(r, 0));
+  const calls = [];
+  const call = async (env) => {
+    calls.push(env);
+    return { ok: true, value: `${env.field}-of-${env.id}` };
+  };
+  const contexts = attachRecordContexts({
+    engine,
+    store,
+    bound: [],
+    queryBound: [
+      { storePath: "app.reader.title", path: "app.reader", query: "publishedEdition", args: [], record: null, recordPath: "app.currentEditionId", field: "title" },
+      { storePath: "app.reader.body", path: "app.reader", query: "publishedEdition", args: [], record: null, recordPath: "app.currentEditionId", field: "body" },
+    ],
+    call,
+    log: { warn: () => {} },
+  });
+  await contexts.ready;
+
+  check(
+    "empty selection: the reader boots as an empty context, no wire call",
+    calls.length === 0 && store.get("app.reader.title") === undefined
+  );
+
+  store.set("app.currentEditionId", 3, "system");
+  await tick();
+  await tick();
+  check(
+    "selection change fetches every bound field through the query wrap",
+    calls.length === 2 &&
+      calls.every((c) => c.type === "apskel.data.get" && c.query === "publishedEdition" && c.id === 3 && eq(c.params, [])) &&
+      store.get("app.reader.title") === "title-of-3" &&
+      store.get("app.reader.body") === "body-of-3",
+    JSON.stringify({ calls, title: store.get("app.reader.title") })
+  );
+
+  store.set("app.currentEditionId", "", "system");
+  await tick();
+  check(
+    "selection emptying empties the context without a call",
+    calls.length === 2 && store.get("app.reader.title") === undefined,
+    JSON.stringify({ calls: calls.length, title: store.get("app.reader.title") })
+  );
 }
 
 // ---------------------------------------------------------------------------

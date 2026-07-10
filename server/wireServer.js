@@ -37,6 +37,11 @@ const IDENTITY_READABLE = new Map([
 
 const DEFAULT_RULES = { read: "users", write: "users" }; // pre-7.2 behavior
 
+// An empty value can never address a row, per RESOLVED (empty reference
+// values are the empty context): the doors answer empty or 400, never a
+// type error surfacing as a 500.
+const emptyValue = (v) => v === undefined || v === null || v === "";
+
 export function attachWire(
   app,
   {
@@ -370,6 +375,8 @@ export function attachWire(
         const given = Array.isArray(envelope.params) ? envelope.params : [];
         const full = queryParams(q, given, req, res);
         if (!full) return;
+        // A parameter is a selection value: empty selects nothing.
+        if (full.some(emptyValue)) return res.json({ ok: true, rows: [] });
         params.push(...full);
         sql = `SELECT ${cols.map(quoteIdent).join(", ")} FROM (${q.sql}) q`;
       } else {
@@ -379,8 +386,12 @@ export function attachWire(
           let refIndex = 0;
           const given = Array.isArray(envelope.filterValues) ? envelope.filterValues : [];
           for (const item of c.filter.items) {
-            values.push(item.kind === "literal" ? item.value : given[refIndex++]);
+            const v = item.kind === "literal" ? item.value : given[refIndex++];
+            // An empty reference drops out of the match set; an emptied
+            // set matches no row without asking SQL.
+            if (!emptyValue(v)) values.push(v);
           }
+          if (values.length === 0) return res.json({ ok: true, rows: [] });
           params.push(values);
           sql += ` WHERE ${quoteIdent(c.filter.column)} = ANY($${params.length})`;
         }
@@ -524,7 +535,7 @@ export function attachWire(
           .status(400)
           .json({ ok: false, error: `no collection-bound table '${table}' in this app` });
       }
-      if (id === undefined || id === null) {
+      if (emptyValue(id)) {
         return res.status(400).json({ ok: false, error: "missing id" });
       }
       let g = { ownerUserId: null };
@@ -597,12 +608,18 @@ export function attachWire(
         if (auth && q.read !== "public" && !auth.identity(req)) {
           return res.status(401).json({ ok: false, error: "authentication required" });
         }
-        if (envelope.id === undefined || envelope.id === null) {
+        if (emptyValue(envelope.id)) {
           return res.status(400).json({ ok: false, error: "missing id" });
         }
         const given = Array.isArray(envelope.params) ? envelope.params : [];
         const full = queryParams(q, given, req, res);
         if (!full) return;
+        // An empty parameter selects nothing: the wrapped query has no rows.
+        if (full.some(emptyValue)) {
+          return res
+            .status(404)
+            .json({ ok: false, error: `no ${envelope.query} row with id ${envelope.id}` });
+        }
         const result = await db.query(
           `SELECT ${quoteIdent(envelope.field)} AS value FROM (${q.sql}) q ` +
             `WHERE q.id = $${full.length + 1}`,
@@ -649,7 +666,7 @@ export function attachWire(
         res.status(400).json({ ok: false, error: `no bound field '${table}.${field}' in this app` });
         return null;
       }
-      if (id === undefined || id === null) {
+      if (emptyValue(id)) {
         res.status(400).json({ ok: false, error: "missing id" });
         return null;
       }
@@ -677,7 +694,7 @@ export function attachWire(
       res.status(400).json({ ok: false, error: `no bound field '${table}.${field}' in this app` });
       return null;
     }
-    if (id === undefined || id === null) {
+    if (emptyValue(id)) {
       res.status(400).json({ ok: false, error: "missing id" });
       return null;
     }
@@ -702,7 +719,7 @@ export function attachWire(
       res.status(400).json({ ok: false, error: `no set field '${table}.${edge}' in this app` });
       return null;
     }
-    if (id === undefined || id === null) {
+    if (emptyValue(id)) {
       res.status(400).json({ ok: false, error: "missing id" });
       return null;
     }

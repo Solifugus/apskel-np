@@ -462,6 +462,17 @@ console.log("\nserver — @user from the token, create-declared inserts, DB reje
     JSON.stringify(dbQueries[0])
   );
 
+  const gotEmpty = await post(
+    { type: "apskel.data.get", query: "myDrafts", field: "title", id: "", params: [] },
+    tokenFor(7)
+  );
+  const gotEmptyBody = await gotEmpty.json();
+  check(
+    "the query-wrap get with an empty id is a missing id -> 400, never a type error",
+    gotEmpty.status === 400 && gotEmptyBody.error === "missing id",
+    JSON.stringify(gotEmptyBody)
+  );
+
   dbQueries.length = 0;
   const mark = await post(
     { type: "apskel.data.insert", table: "comment_marks", values: { comment_id: 3, kind: "pro", user_id: 999 } },

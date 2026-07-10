@@ -164,6 +164,7 @@ if (bundle.wire) {
     store,
     bound: bundle.bound,
     setFields: bundle.setFields ?? [],
+    queryBound: bundle.queryBound ?? [],
     revisions,
     call,
     skipInitial: new Set(Object.keys(bundle.initialData ?? {})),

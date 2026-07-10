@@ -196,11 +196,19 @@ export function attachWireReceive({
 // no initialData (the bundle is a Wire door too), so its context boots
 // empty, fetches here, and refetchAll() after login fills it. skipInitial
 // lists store paths the bundle already seeded — no redundant boot fetch.
+//
+// Query-sourced record contexts (the KF reader) ride the same machinery:
+// their fields fetch through the query wrap (apskel.data.get with query=
+// instead of table=), per RESOLVED (named queries are declared, read-only
+// sources) — read-only by grammar, so they join the fetch side only,
+// never the send side. An empty call argument is the empty context, per
+// RESOLVED (empty reference values are the empty context).
 export function attachRecordContexts({
   engine,
   store,
   bound,
   setFields = [],
+  queryBound = [],
   revisions = new Map(),
   call,
   skipInitial = new Set(),
@@ -226,6 +234,7 @@ export function attachRecordContexts({
   // never through initialData (member arrays are wire state from the
   // first fetch on).
   for (const s of setFields) addField(s, true);
+  for (const q of queryBound) addField(q, false);
   const loading = new Set();
 
   async function loadContext(c, { skip } = {}) {
@@ -240,9 +249,17 @@ export function attachRecordContexts({
     loading.add(c.path);
     try {
       for (const b of fields) {
-        const resp = b.isSet
-          ? await call({ type: "apskel.data.getMembers", table: b.table, id, edge: b.edge })
-          : await call({ type: "apskel.data.get", table: b.table, id, field: b.field });
+        let resp;
+        if (b.isSet) {
+          resp = await call({ type: "apskel.data.getMembers", table: b.table, id, edge: b.edge });
+        } else if (b.query) {
+          const params = b.args.map((a) => (a.kind === "literal" ? a.value : store.get(a.storePath)));
+          resp = params.some(emptyId)
+            ? { ok: true, value: undefined } // an empty argument is the empty context
+            : await call({ type: "apskel.data.get", query: b.query, field: b.field, id, params });
+        } else {
+          resp = await call({ type: "apskel.data.get", table: b.table, id, field: b.field });
+        }
         if (gen !== c.gen) return; // selection moved again — stale fetch
         if (resp?.ok) {
           store.applyServerWrite(b.storePath, b.isSet ? resp.members : resp.value);
@@ -250,7 +267,7 @@ export function attachRecordContexts({
         } else {
           store.applyServerWrite(b.storePath, undefined);
           log.warn?.(
-            `[apskel] could not load ${b.table} row ${id} ${b.isSet ? b.edge : b.field}:`,
+            `[apskel] could not load ${b.table ?? b.query} row ${id} ${b.isSet ? b.edge : b.field}:`,
             resp?.error
           );
         }
@@ -262,10 +279,20 @@ export function attachRecordContexts({
 
   const all = [];
   for (const c of contexts.values()) {
-    if (c.recordPath) {
+    // A query call argument parameterizes the fetch exactly like the
+    // selection value does — either changing re-runs the load.
+    const argRefs = [
+      ...new Set(
+        c.fields.flatMap((b) =>
+          b.query ? b.args.filter((a) => a.kind === "ref").map((a) => a.storePath) : []
+        )
+      ),
+    ];
+    const watched = [...(c.recordPath ? [c.recordPath] : []), ...argRefs];
+    if (watched.length) {
       engine.watch({
         name: `record:${c.path}`,
-        fields: [c.recordPath],
+        fields: watched,
         run: () => {
           loadContext(c);
         },
@@ -328,6 +355,20 @@ export function attachCollectionSync({
     const filterValues = c.filter
       ? c.filter.items.filter((i) => i.kind === "ref").map((i) => store.get(i.storePath))
       : [];
+    // An empty reference value is the empty context, per RESOLVED (empty
+    // reference values are the empty context): a query with an empty
+    // argument, or a filter whose match set is all-empty references (no
+    // literal to carry it), clears without a round trip — the same
+    // String-compare that makes "" match no broadcast locally.
+    const hasLiteral = c.filter?.items.some((i) => i.kind === "literal");
+    const emptyContext =
+      (c.query && params.some(emptyId)) ||
+      (c.filter && c.filter.items.length > 0 && !hasLiteral && filterValues.every(emptyId));
+    if (emptyContext) {
+      controllers.get(c.path).clear();
+      state.rows.clear();
+      return;
+    }
     const resp = await call({ type: "apskel.data.select", path: c.path, params, filterValues });
     if (gen !== state.gen) return; // superseded mid-flight
     const ctrl = controllers.get(c.path);
