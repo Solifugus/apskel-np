@@ -2795,7 +2795,27 @@ The failure taxonomy at flush, closed:
 * **Network failure** — stop; everything un-acked stays queued; we are
   simply offline again.
 
-RESOLVED (temp ids: negative integers, queue rewrite, refetch heals):
+RESOLVED (a clean lineage's own acks advance later pins — verification
+catch, 2026-07-11): the entries above left a hole their own examples
+step into. A clean lineage of two `detect` sets pins both at the seen
+revision; flushing the first moves the row's revision — by OUR OWN
+accepted write — and a verbatim flush of the second now 409s. Read
+strictly, the taxonomy's "the server moved between pull and flush"
+would park it: every two-field offline edit would prompt against
+itself, which contradicts both "everything else flushes cleanly" and
+the per-field-resolution entry's premise that only a FOREIGN move is a
+conflict. The ruling: within a flushing lineage, each accepted write's
+returned revision advances the pinned baseRevision of later entries on
+the same row before they are sent, and the advanced entries re-persist
+(a crash between acks must not resurrect the stale pin). This is not
+re-pinning-to-newest (which the coalescing entry forbids as silently
+converting detect to lww): the pin still guards against every foreign
+move — pull-time mismatch parks the lineage before any flush, and a
+mid-flush foreign 409 still parks it (the flush stops at the conflicted
+entry; nothing later flushes past it). It advances only by the
+flusher's own acks, in seq order — exactly the revision walk the same
+edits would have produced had the session been online. Granularity
+unchanged: detection stays per-record, resolution stays per-field.
 temp ids are **negative integers** allocated by decrementing a counter
 in the `meta` store. They cannot collide with serial PKs, they sort,
 they are visibly temporary in any debug dump, and they keep instance

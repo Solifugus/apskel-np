@@ -786,6 +786,15 @@ export function attachWire(
   // RESOLVED (broadcasts obey read rules) — including its recorded
   // tradeoff: connect-time identity persists until reconnect.
   app.get("/events", (req, res) => {
+    // An invalid token is not an anonymous visitor: it is a stale
+    // identity — stateless tokens die on every server restart — whose
+    // holder must re-mint. Refusing the connection is what tells the
+    // client's feed to do so; silently degrading to anonymous would
+    // leave a reconnected tab deaf to every users/owner-scoped
+    // broadcast until reload. Absent token = anonymous, as before.
+    if (auth && req.query?.token && !auth.verifyToken(req.query.token)) {
+      return res.status(401).end();
+    }
     res.set({
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",

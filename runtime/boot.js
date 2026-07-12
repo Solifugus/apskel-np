@@ -155,6 +155,31 @@ if (bundle.wire) {
   const revisions = new Map(Object.entries(bundle.revisions ?? {}));
   window.__apskel.revisions = revisions;
 
+  // The one re-mint path. A re-mint is a token change like a login: the
+  // SSE connection's identity was stamped at connect with the now-dead
+  // token, so the feed must reconnect too — tokens are stateless HMAC,
+  // every server restart invalidates them, and a feed left identified
+  // by a dead token degrades to anonymous and silently stops hearing
+  // users/owner-scoped broadcasts.
+  const remintToken = async () => {
+    if (!bundle.auth || !credentials) return false;
+    let minted;
+    try {
+      minted = await call({ type: "apskel.auth.token", ...credentials() });
+    } catch {
+      return false; // offline — not a refusal; the caller retries later
+    }
+    if (!minted?.ok) {
+      // Definitive refusal: this device credential no longer mints.
+      // An anonymous feed is the honest state, not a dead-token loop.
+      token = null;
+      return false;
+    }
+    token = minted.token;
+    reconnectEvents();
+    return true;
+  };
+
   // Record contexts: fetch the selected row now (deep links — the router
   // already seeded the selection; fixed-record contexts of non-public
   // tables ship no initialData and fetch here too), refetch on selection
@@ -180,14 +205,10 @@ if (bundle.wire) {
     send: async (envelope) => {
       try {
         let r = await postWire(envelope);
-        if (r.status === 401 && bundle.auth && credentials) {
-          // Token expired mid-session: re-mint once with the device
-          // credential and retry the same envelope.
-          const minted = await call({ type: "apskel.auth.token", ...credentials() });
-          if (minted?.ok) {
-            token = minted.token;
-            r = await postWire(envelope);
-          }
+        if (r.status === 401 && (await remintToken())) {
+          // Token expired mid-session: re-minted with the device
+          // credential (feed re-identified) — retry the same envelope.
+          r = await postWire(envelope);
         }
         if (r.status === 403) {
           // Forbidden by a permission rule: the server enforces, the
@@ -336,12 +357,7 @@ if (bundle.wire) {
     bound: bundle.bound,
     bundle,
     postWire,
-    remint: async () => {
-      if (!credentials) return false;
-      const minted = await call({ type: "apskel.auth.token", ...credentials() });
-      if (minted?.ok) token = minted.token;
-      return !!minted?.ok;
-    },
+    remint: remintToken,
     credentials,
     revisions,
   });
@@ -356,13 +372,47 @@ if (bundle.wire) {
   // the connection's identity is fixed at connect — so a token change
   // (login) reconnects, per RESOLVED (broadcasts obey read rules).
   let events = null;
+  let eventsRetry = null;
   reconnectEvents = () => {
     events?.close();
+    clearTimeout(eventsRetry);
     const url = bundle.wire.events + (token ? `?token=${encodeURIComponent(token)}` : "");
     events = new EventSource(url);
     // A (re)opened feed is the reconnect signal: resync — pull, reconcile,
     // flush clean lineages under the flush lock, surface any conflicts.
-    events.onopen = () => sync.resync();
+    // Then heal what the dead stream missed: SSE has no replay, so
+    // broadcasts sent while this tab was disconnected are simply gone —
+    // "missed broadcasts and ordering are healed by re-pull on
+    // reconnect", per RESOLVED (sync_receipts). Re-pull the visible
+    // record contexts and collections through their own machinery
+    // (sends suspended, server-origin writes, revisions adopted), then
+    // repaint still-queued edits (parked conflicts, offline-again
+    // captures) back over the pull through the replay door.
+    events.onopen = async () => {
+      try {
+        await sync.resync();
+        await recordContexts?.refetchAll();
+        collectionSync?.refetchAll();
+        sync.bootOverlay();
+      } catch (e) {
+        console.warn("[apskel] reconnect heal failed:", e);
+      }
+    };
+    // The browser only auto-retries while a DROPPED stream stays
+    // CONNECTING; a refused reconnect attempt fails the EventSource
+    // permanently and silently. The feed is the reconnect signal, so
+    // the retry is ours — and a refusal may mean our token died with a
+    // server restart (the server refuses invalid tokens on /events
+    // precisely so we learn this), so re-mint first: on success
+    // remintToken reconnects the feed itself; otherwise (offline, or
+    // credential refused → token cleared) reopen plain and keep trying.
+    events.onerror = () => {
+      if (events.readyState === EventSource.CLOSED) {
+        eventsRetry = setTimeout(async () => {
+          if (!(await remintToken())) reconnectEvents();
+        }, 3000);
+      }
+    };
     events.onmessage = (e) => {
       const envelope = JSON.parse(e.data);
       handleEvent(envelope);

@@ -17,8 +17,13 @@ export function createQueue({ bindings = {}, log, restore } = {}) {
   // restore: a prior snapshot() — the IndexedDB adapter hydrates the
   // durable queue through this at boot. Counters resume where they
   // stopped: seq is never reused (the idempotency key depends on it)
-  // and temp ids never collide across restarts.
-  let nextSeq = restore?.nextSeq ?? 1;
+  // and temp ids never collide across restarts. nextSeq clamps to the
+  // restored entries so a stale counter can never re-mint a seq in use.
+  let nextSeq = Math.max(
+    restore?.nextSeq ?? 1,
+    ...(restore?.entries ?? []).map((e) => e.seq + 1),
+    ...(restore?.dead ?? []).map((e) => e.seq + 1)
+  );
   let tempCounter = restore?.tempCounter ?? 0;
   const entries = [...(restore?.entries ?? [])]; // { seq, envelope, conflict, tempId? } in seq order
   const dead = [...(restore?.dead ?? [])]; // moved, never deleted — dies-loudly is the house rule
@@ -64,7 +69,36 @@ export function createQueue({ bindings = {}, log, restore } = {}) {
     return tempCounter;
   }
 
-  function enqueue(envelope, { conflict, tempId } = {}) {
+  function coalesceTarget(env) {
+    if (env.type === "apskel.data.set") {
+      return entries.find(
+        (e) =>
+          e.envelope.type === env.type &&
+          e.envelope.table === env.table &&
+          e.envelope.id === env.id &&
+          e.envelope.field === env.field
+      );
+    }
+    if (env.type === "apskel.data.setMembers") {
+      return entries.find(
+        (e) =>
+          e.envelope.type === env.type &&
+          e.envelope.table === env.table &&
+          e.envelope.id === env.id &&
+          e.envelope.edge === env.edge
+      );
+    }
+    return undefined;
+  }
+
+  // Would this envelope coalesce into an existing entry? The durable
+  // adapter asks before enqueueing: only a NEW entry needs a seq from
+  // the shared meta counter — a coalesce keeps the existing one.
+  function coalesces(envelope) {
+    return coalesceTarget(translateEnvelope(envelope, liveResolver)) !== undefined;
+  }
+
+  function enqueue(envelope, { conflict, tempId, seq } = {}) {
     // conflict= is the queueing gate — no new axis. offline-readonly
     // refuses per the autosave-403 pattern: warning, no retry.
     if (conflict === "offline-readonly" || conflict === undefined) {
@@ -77,14 +111,8 @@ export function createQueue({ bindings = {}, log, restore } = {}) {
     // A write captured against T during the heal window enqueues as R.
     const env = translateEnvelope(envelope, liveResolver);
 
+    const existing = coalesceTarget(env);
     if (env.type === "apskel.data.set") {
-      const existing = entries.find(
-        (e) =>
-          e.envelope.type === env.type &&
-          e.envelope.table === env.table &&
-          e.envelope.id === env.id &&
-          e.envelope.field === env.field
-      );
       if (existing) {
         // Last value wins; the FIRST baseRevision stays pinned — the
         // revision the user last actually saw. Re-pinning to the newest
@@ -95,13 +123,6 @@ export function createQueue({ bindings = {}, log, restore } = {}) {
       if (conflict !== "detect") delete env.baseRevision;
     } else if (env.type === "apskel.data.setMembers") {
       delete env.baseRevision; // lww at the set level — recorded deferral
-      const existing = entries.find(
-        (e) =>
-          e.envelope.type === env.type &&
-          e.envelope.table === env.table &&
-          e.envelope.id === env.id &&
-          e.envelope.edge === env.edge
-      );
       if (existing) {
         existing.envelope.members = env.members;
         return { queued: true, seq: existing.seq };
@@ -110,10 +131,16 @@ export function createQueue({ bindings = {}, log, restore } = {}) {
     // insert and delete never coalesce; a queued delete does not prune
     // earlier sets — anything inconsistent dies loudly as a 400 at flush.
 
-    const entry = { seq: nextSeq, envelope: env, conflict };
-    nextSeq += 1;
+    // seq: preallocated by the durable adapter (atomic against the
+    // shared meta counter — tabs share one database, so a tab-local
+    // counter would collide). The internal counter serves the DB-free
+    // harness and stays monotonic past any provided seq.
+    const assigned = seq ?? nextSeq;
+    nextSeq = Math.max(nextSeq, assigned + 1);
+    const entry = { seq: assigned, envelope: env, conflict };
     if (tempId !== undefined) entry.tempId = tempId;
     entries.push(entry);
+    entries.sort((a, b) => a.seq - b.seq); // seq order is the replay order
     return { queued: true, seq: entry.seq };
   }
 
@@ -240,6 +267,29 @@ export function createQueue({ bindings = {}, log, restore } = {}) {
     return entries.filter((e) => entryConflicts(e, revisions));
   }
 
+  // The flusher's own accepted write moved the row's revision; later
+  // queued sets on that row were typed on top of the flushed value
+  // (queue order is the session's order), so their pins advance with
+  // it — the sequencing an online session would have produced, write
+  // by write. A FOREIGN move never advances a pin (that would silently
+  // convert detect into lww): only the flusher calls this, with the
+  // revision its own ack returned. Returns the advanced entries so the
+  // durable adapter can re-persist them (a crash between acks must not
+  // resurrect the stale pin).
+  function advanceBase({ table, id, afterSeq, revision }) {
+    const advanced = [];
+    for (const e of entries) {
+      const env = e.envelope;
+      if (e.seq <= afterSeq) continue;
+      if (env.type !== "apskel.data.set") continue;
+      if (env.table !== table || String(env.id) !== String(id)) continue;
+      if (env.baseRevision === undefined) continue;
+      env.baseRevision = revision;
+      advanced.push(e);
+    }
+    return advanced;
+  }
+
   function findSet({ table, id, field }) {
     return entries.find(
       (e) =>
@@ -273,6 +323,24 @@ export function createQueue({ bindings = {}, log, restore } = {}) {
     return true;
   }
 
+  // Re-hydrate from the durable store in place. The lock holder calls
+  // this on acquisition: tabs share one database, so the durable queue
+  // is the truth and this tab's memory is only a cache — a later tab
+  // "finds the queue empty and its resync degenerates to a pull" (the
+  // flush-leadership RESOLVED entry) exactly because it reloads here.
+  // The live temp-id mapping survives: its lifetime is this page's heal
+  // window, not the store's.
+  function reload(r = {}) {
+    entries.length = 0;
+    entries.push(...(r.entries ?? []));
+    entries.sort((a, b) => a.seq - b.seq);
+    dead.length = 0;
+    dead.push(...(r.dead ?? []));
+    if (r.nextSeq !== undefined) nextSeq = Math.max(nextSeq, r.nextSeq);
+    for (const e of [...entries, ...dead]) nextSeq = Math.max(nextSeq, e.seq + 1);
+    if (r.tempCounter !== undefined) tempCounter = Math.min(tempCounter, r.tempCounter);
+  }
+
   // Everything the durable adapter must persist to rebuild this queue.
   // The live mapping is deliberately absent: its lifetime is the heal
   // window of one page's [T] instances, which do not survive a reload.
@@ -287,7 +355,9 @@ export function createQueue({ bindings = {}, log, restore } = {}) {
 
   return {
     snapshot,
+    reload,
     allocTempId,
+    coalesces,
     enqueue,
     ack,
     ackInsert,
@@ -300,6 +370,7 @@ export function createQueue({ bindings = {}, log, restore } = {}) {
     lineages,
     reconcile,
     conflictedEntries,
+    advanceBase,
     keepMine,
     takeTheirs,
   };

@@ -340,5 +340,126 @@ console.log("\nstore — the replay origin: minted only by the boot overlay, sup
   check("a user write still fires it", wireFired === 1);
 }
 
+// --- the shared-database contract (verification catch, 2026-07-11) ---------
+// Tabs share one durable queue: seq comes from the shared meta counter
+// (preallocated by the adapter, atomic), never a tab-local count — two
+// tabs minting the same seq would clobber each other's durable entries
+// and poison the (db, device_id, seq) insert idempotency key. The lock
+// holder reloads durable truth in place before flushing.
+
+console.log("\nshared-database contract:");
+{
+  // Two "tabs" restored from the same durable snapshot (the bug's setup).
+  const tabA = createQueue({ bindings: BINDINGS, restore: { nextSeq: 2 } });
+  const tabB = createQueue({ bindings: BINDINGS, restore: { nextSeq: 2 } });
+
+  // The adapter preallocates: enqueue accepts the durable seq.
+  const a = tabA.enqueue(
+    { type: "apskel.data.set", table: "docs", id: 7, field: "title", value: "A", baseRevision: 4 },
+    { conflict: "detect", seq: 2 }
+  );
+  const b = tabB.enqueue(
+    { type: "apskel.data.set", table: "docs", id: 7, field: "body", value: "B", baseRevision: 4 },
+    { conflict: "detect", seq: 3 }
+  );
+  check("enqueue takes the preallocated seq", a.seq === 2 && b.seq === 3);
+  const next = tabB.enqueue(
+    { type: "apskel.data.insert", table: "docs", values: { title: "x" } },
+    { conflict: "detect" }
+  );
+  check("the internal counter stays monotonic past a provided seq", next.seq === 4);
+
+  // coalesces() is the adapter's pre-allocation question.
+  check("coalesces: true for a set on an already-queued field",
+    tabA.coalesces({ type: "apskel.data.set", table: "docs", id: 7, field: "title", value: "A2" }));
+  check("coalesces: false for a new field / for inserts",
+    !tabA.coalesces({ type: "apskel.data.set", table: "docs", id: 7, field: "body", value: "B" }) &&
+    !tabA.coalesces({ type: "apskel.data.insert", table: "docs", values: {} }));
+  const co = tabA.enqueue(
+    { type: "apskel.data.set", table: "docs", id: 7, field: "title", value: "A2" },
+    { conflict: "detect" }
+  );
+  check("a coalesce keeps the existing seq (no allocation)", co.seq === 2);
+
+  // reload: durable truth replaces memory in place, counters only climb.
+  const durable = [
+    { seq: 2, envelope: { type: "apskel.data.set", table: "docs", id: 7, field: "title", value: "A2", baseRevision: 4 }, conflict: "detect" },
+    { seq: 3, envelope: { type: "apskel.data.set", table: "docs", id: 7, field: "body", value: "B", baseRevision: 4 }, conflict: "detect" },
+  ];
+  tabA.reload({ entries: durable, dead: [], nextSeq: 4 });
+  check("reload adopts the other tab's durable entry",
+    tabA.entries().length === 2 && tabA.entries()[1].envelope.field === "body");
+  const after = tabA.enqueue(
+    { type: "apskel.data.insert", table: "docs", values: {} },
+    { conflict: "detect" }
+  );
+  check("reload clamps the counter past every durable seq", after.seq >= 4);
+
+  // reload preserves the live T→R mapping (this page's heal window).
+  const healer = createQueue({ bindings: BINDINGS });
+  const t = healer.allocTempId();
+  healer.enqueue(
+    { type: "apskel.data.insert", table: "articles", values: { title: "d" } },
+    { conflict: "detect", tempId: t }
+  );
+  healer.ackInsert(healer.entries()[0].seq, 91);
+  healer.reload({ entries: [], dead: [] });
+  const translated = healer.enqueue(
+    { type: "apskel.data.set", table: "articles", id: t, field: "title", value: "post-reload" },
+    { conflict: "detect" }
+  );
+  check("reload preserves the live mapping — a capture still translates T→R",
+    healer.entries().find((e) => e.seq === translated.seq).envelope.id === 91);
+
+  // Restore clamps too: a stale counters record can never re-mint a seq.
+  const stale = createQueue({ bindings: BINDINGS, restore: { entries: durable, nextSeq: 1 } });
+  const minted = stale.enqueue(
+    { type: "apskel.data.insert", table: "docs", values: {} },
+    { conflict: "detect" }
+  );
+  check("restore clamps nextSeq past restored entries", minted.seq === 4);
+}
+
+// --- advanceBase: the flusher's own ack sequences later pins ---------------
+// A clean lineage flushes in seq order; each accepted write moves the
+// row's revision, and the entries typed on top of it advance with it —
+// the sequencing an online session would have produced. Foreign moves
+// never advance a pin: only the flusher calls this, with its own ack's
+// revision. Without this, a two-field offline edit self-conflicts.
+
+console.log("\nadvanceBase — own acks sequence the lineage:");
+{
+  const q = createQueue({ bindings: BINDINGS });
+  const first = q.enqueue(set("article_editions", 2, "title", "T", 183), { conflict: "detect" });
+  q.enqueue(set("article_editions", 2, "body", "B", 183), { conflict: "detect" });
+  q.enqueue(set("article_editions", 9, "body", "other row", 183), { conflict: "detect" });
+  q.enqueue(setMembers("article_editions", 2, "tags", [1]), { conflict: "detect" });
+
+  // The title flush was acked at revision 184.
+  q.ack(first.seq);
+  const advanced = q.advanceBase({ table: "article_editions", id: 2, afterSeq: first.seq, revision: 184 });
+  check("the same row's later set advances to the acked revision",
+    advanced.length === 1 && advanced[0].envelope.field === "body" &&
+    advanced[0].envelope.baseRevision === 184);
+  const otherRow = q.entries().find((e) => e.envelope.id === 9);
+  check("a different row's pin is untouched", otherRow.envelope.baseRevision === 183);
+  const members = q.entries().find((e) => e.envelope.type === "apskel.data.setMembers");
+  check("setMembers (no baseRevision, lww at set level) is untouched",
+    members.envelope.baseRevision === undefined);
+
+  // With the advanced pin, the lineage reconciles clean against the
+  // revision our own flush produced — no self-conflict.
+  const { conflicted } = q.reconcile({ "article_editions:2": 184, "article_editions:9": 183 });
+  check("the advanced lineage is clean against its own flush's revision", conflicted.length === 0);
+
+  // Entries at or before the acked seq never advance (nothing earlier exists
+  // to re-pin; the guard is the seq comparison itself).
+  const q2 = createQueue({ bindings: BINDINGS });
+  const e1 = q2.enqueue(set("article_editions", 2, "title", "T", 183), { conflict: "detect" });
+  const none = q2.advanceBase({ table: "article_editions", id: 2, afterSeq: e1.seq, revision: 184 });
+  check("advanceBase touches only entries after the acked seq", none.length === 0 &&
+    q2.entries()[0].envelope.baseRevision === 183);
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);
