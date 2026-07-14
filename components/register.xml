@@ -5,11 +5,12 @@
     {displayName = ""}
 
     <form type="layout" orient="vertical">
-        Display name:
+        <formHead type="layout">Create an account</formHead>
+        <nameLabel type="layout">Display name</nameLabel>
         <nameInput type="text-input" field="displayName" placeholder="how you sign"/>
-        Email:
+        <emailLabel type="layout">Email</emailLabel>
         <emailInput type="text-input" field="email" placeholder="you@example.com"/>
-        Password:
+        <passwordLabel type="layout">Password</passwordLabel>
         <passwordInput type="text-input" field="password" kind="password"/>
         <submit type="button" action="apskel.auth.registerUser(email, password, displayName)">Create Account</submit>
     </form>

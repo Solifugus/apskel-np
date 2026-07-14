@@ -1,12 +1,13 @@
 <component name="conflict-prompt">
 
     <panel type="layout" orient="vertical" visible="app.sync.conflict.pending">
-        Someone else changed {app.sync.conflict.field} on {app.sync.conflict.table}.
-        Yours: {app.sync.conflict.mine}
-        Theirs: {app.sync.conflict.theirs}
-        ({app.sync.conflict.pending} to resolve)
-        <keep type="button" action="apskel.sync.keepMine()">Keep mine</keep>
-        <take type="button" action="apskel.sync.takeTheirs()">Take theirs</take>
+        <conflictHead type="layout">Someone else changed {app.sync.conflict.field} on {app.sync.conflict.table} ({app.sync.conflict.pending} to resolve)</conflictHead>
+        <mineRow type="layout">Yours: {app.sync.conflict.mine}</mineRow>
+        <theirsRow type="layout">Theirs: {app.sync.conflict.theirs}</theirsRow>
+        <verbRow type="layout" orient="horizontal">
+            <keep type="button" action="apskel.sync.keepMine()">Keep mine</keep>
+            <take type="button" action="apskel.sync.takeTheirs()">Take theirs</take>
+        </verbRow>
     </panel>
 
 </component>

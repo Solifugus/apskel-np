@@ -1,9 +1,9 @@
 <component name="text-editor">
 
     <editorBox type="layout" orient="vertical">
-        Title:
+        <titleLabel type="layout">Title</titleLabel>
         <titleInput type="text-input" field=".title" placeholder="article title"/>
-        Body:
+        <bodyLabel type="layout">Body</bodyLabel>
         <bodyInput type="rich-text" mode="split" field=".body" rows="10" placeholder="draft here — it autosaves (markup: # heading, **bold**, *italic*, `code`, [link](url), - list)"/>
     </editorBox>
 

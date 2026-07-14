@@ -4,12 +4,13 @@
     {password = ""}
 
     <form type="layout" orient="vertical">
-        Email:
+        <formHead type="layout">Sign in</formHead>
+        <emailLabel type="layout">Email</emailLabel>
         <emailInput type="text-input" field="email" placeholder="you@example.com"/>
-        Password:
+        <passwordLabel type="layout">Password</passwordLabel>
         <passwordInput type="text-input" field="password" kind="password"/>
         <submit type="button" action="apskel.auth.loginUser(email, password)">Log In</submit>
-        {app.identity.error}
+        <authError type="layout">{app.identity.error}</authError>
     </form>
 
 </component>

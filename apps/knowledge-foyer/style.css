@@ -1,19 +1,458 @@
-/* App theme — ALL appearance lives here; primitives ship structure only. */
+/* Knowledge Foyer — the app theme. ALL appearance lives here; primitives
+   ship structure only. Hooks: type classes (.apskel-<type>, control
+   classes) and semantic name classes (.apskel-name-<name> — the names
+   written in app.xml and the shipped composites). */
 
-body {
-  font-family: system-ui, sans-serif;
-  margin: 2rem;
-  color: #222;
-  background: #fafafa;
+/* ---------- tokens ------------------------------------------------------ */
+
+:root {
+  --bg: #f6f4ef;            /* warm paper */
+  --surface: #fffdf9;
+  --ink: #262219;
+  --muted: #7c7466;
+  --line: #e5dfd2;
+  --brand: #8a4b2c;         /* sienna — bookish, quiet */
+  --brand-ink: #fff8f2;
+  --brand-hover: #743e24;
+  --focus: #b8804f;
+  --warn-bg: #fdf3e2;
+  --warn-line: #ecc98f;
+  --warn-ink: #7a4d0f;
+  --danger: #a33d2e;
+  --serif: "Charter", "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+  --ui: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: ui-monospace, "SF Mono", Consolas, monospace;
+  --radius: 10px;
+  --shadow: 0 1px 2px rgb(38 34 25 / 0.05), 0 2px 8px rgb(38 34 25 / 0.04);
 }
 
-.apskel-layout { gap: 0.6rem; max-width: 40rem; }
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1a1814;
+    --surface: #23201b;
+    --ink: #e9e4d8;
+    --muted: #a49a88;
+    --line: #383327;
+    --brand: #d99f6f;
+    --brand-ink: #26190e;
+    --brand-hover: #e6b489;
+    --focus: #b8804f;
+    --warn-bg: #322713;
+    --warn-line: #6b5426;
+    --warn-ink: #eccf96;
+    --danger: #e07a68;
+    --shadow: 0 1px 2px rgb(0 0 0 / 0.3);
+  }
+}
+
+/* ---------- page frame -------------------------------------------------- */
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--ui);
+  font-size: 16px;
+  line-height: 1.5;
+  -webkit-text-size-adjust: 100%;
+  overflow-x: hidden; /* the full-bleed header's 50vw includes the scrollbar gutter */
+}
+
+#apskel-root {
+  max-width: 44rem;
+  margin-inline: auto;
+  padding: 0 1.25rem 4rem;
+}
+
+#apskel-root > .apskel-layout { gap: 0; }
+
+/* ---------- header ------------------------------------------------------ */
+
+.apskel-name-who {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  align-items: center;
+  gap: 1rem;
+  /* full-bleed bar inside the centered column */
+  margin-inline: calc(50% - 50vw);
+  padding: 0.6rem max(1.25rem, calc(50vw - 22rem));
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 1.5rem;
+}
+
+.apskel-name-brand .apskel-button-control {
+  font-family: var(--serif);
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: var(--brand);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+
+.apskel-name-identityBadge {
+  font-size: 0.82rem;
+  color: var(--muted);
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.apskel-name-whoStatus {
+  font-size: 0.72rem;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0.1rem 0.6rem;
+  background: var(--surface);
+}
+
+/* ---------- section headings, labels, hints ----------------------------- */
+
+.apskel-name-publishedHead,
+.apskel-name-draftsHead,
+.apskel-name-expoHead,
+.apskel-name-feedbackHead {
+  font-family: var(--serif);
+  font-size: 1.3rem;
+  font-weight: 650;
+  margin-top: 2rem;
+  margin-bottom: 0.6rem;
+  padding-bottom: 0.3rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.apskel-name-titleLabel,
+.apskel-name-bodyLabel,
+.apskel-name-tagsLabel,
+.apskel-name-nameLabel,
+.apskel-name-emailLabel,
+.apskel-name-passwordLabel {
+  font-size: 0.82rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-top: 0.9rem;
+  margin-bottom: 0.25rem;
+}
+
+.apskel-name-draftsHint,
+.apskel-name-tagsHint {
+  font-size: 0.85rem;
+  color: var(--muted);
+  font-style: italic;
+  margin-bottom: 0.4rem;
+}
+
+/* ---------- lists as cards ---------------------------------------------- */
+
+.apskel-name-published,
+.apskel-name-drafts,
+.apskel-name-expoList,
+.apskel-name-feedback,
+.apskel-name-ruleList,
+.apskel-name-expoArticles {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.apskel-name-published:empty,
+.apskel-name-drafts:empty,
+.apskel-name-expoList:empty,
+.apskel-name-feedback:empty,
+.apskel-name-ruleList:empty,
+.apskel-name-expoArticles:empty { display: none; }
+
+.apskel-row + .apskel-row { border-top: 1px solid var(--line); }
+
+.apskel-row > .apskel-name-row {
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.6rem 0.9rem;
+}
+
+.apskel-name-rowTitle { min-width: 0; overflow-wrap: anywhere; }
+.apskel-name-marks { gap: 0.4rem; align-items: center; }
+
+.apskel-name-tallies {
+  font-size: 0.82rem;
+  color: var(--muted);
+  gap: 0.15rem;
+  margin-top: 0.5rem;
+}
+
+/* ---------- buttons ----------------------------------------------------- */
+
+.apskel-button-control {
+  font: inherit;
+  font-size: 0.88rem;
+  padding: 0.4rem 0.85rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.12s, border-color 0.12s;
+}
+.apskel-button-control:hover { border-color: var(--focus); }
+.apskel-button-control:active { transform: translateY(1px); }
+
+/* primary actions */
+.apskel-name-submit .apskel-button-control,
+.apskel-name-publish .apskel-button-control,
+.apskel-name-send .apskel-button-control,
+.apskel-name-newExpo .apskel-button-control,
+.apskel-name-addRule .apskel-button-control {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: var(--brand-ink);
+  font-weight: 600;
+}
+.apskel-name-submit .apskel-button-control:hover,
+.apskel-name-publish .apskel-button-control:hover,
+.apskel-name-send .apskel-button-control:hover,
+.apskel-name-newExpo .apskel-button-control:hover,
+.apskel-name-addRule .apskel-button-control:hover {
+  background: var(--brand-hover);
+  border-color: var(--brand-hover);
+}
+
+/* destructive */
+.apskel-name-drop .apskel-button-control { color: var(--danger); }
+
+/* the pro/con marks: compact pills */
+.apskel-name-pro .apskel-button-control,
+.apskel-name-con .apskel-button-control {
+  font-size: 0.76rem;
+  padding: 0.15rem 0.6rem;
+  border-radius: 999px;
+}
+
+/* ---------- forms and inputs -------------------------------------------- */
 
 .apskel-text-input-control,
-.apskel-text-area-control {
+.apskel-text-area-control,
+.apskel-select-control {
   font: inherit;
-  padding: 0.35rem 0.5rem;
-  border: 1px solid #bbb;
+  font-size: 0.95rem;
+  padding: 0.45rem 0.65rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+}
+
+.apskel-text-input-control:focus,
+.apskel-text-area-control:focus,
+.apskel-select-control:focus {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+  border-color: var(--focus);
+}
+
+.apskel-text-input-control::placeholder,
+.apskel-text-area-control::placeholder { color: var(--muted); opacity: 0.7; }
+
+/* auth cards, side by side */
+.apskel-name-authRow { gap: 1.25rem; align-items: stretch; margin-bottom: 1rem; }
+.apskel-name-authRow > .apskel {
+  flex: 1 1 0;
+  min-width: 0;
+}
+.apskel-name-signup .apskel-name-form,
+.apskel-name-signin .apskel-name-form {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 1rem 1.25rem 1.25rem;
+  height: 100%;
+  box-sizing: border-box;
+}
+.apskel-name-formHead {
+  font-family: var(--serif);
+  font-size: 1.1rem;
+  font-weight: 650;
+  margin-bottom: 0.25rem;
+}
+.apskel-name-form .apskel-name-submit { margin-top: 1rem; }
+.apskel-name-authError { color: var(--danger); font-size: 0.85rem; margin-top: 0.5rem; }
+
+/* input bars: the text field grows, the button hugs it */
+.apskel-name-expoBar,
+.apskel-name-commentBar,
+.apskel-name-ruleBar {
+  gap: 0.5rem;
+  align-items: center;
+  margin-top: 0.75rem;
+}
+.apskel-name-expoBar > .apskel-name-expoTitleInput,
+.apskel-name-commentBar > .apskel-name-commentInput { flex: 1 1 auto; }
+.apskel-name-expoTitleInput .apskel-text-input-control,
+.apskel-name-commentInput .apskel-text-input-control { width: 100%; }
+
+/* ---------- the editor -------------------------------------------------- */
+
+.apskel-name-titleInput .apskel-text-input-control {
+  width: 100%;
+  font-family: var(--serif);
+  font-size: 1.25rem;
+  font-weight: 650;
+}
+
+.apskel-rich-text-source {
+  font-family: var(--mono);
+  font-size: 0.88rem;
+  line-height: 1.55;
+  min-height: 16rem;
+}
+
+.apskel-rich-text-split { gap: 1.25rem; }
+.apskel-rich-text-split > .apskel-rich-text-view {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+}
+
+.apskel-name-pubBar {
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 1rem;
+  padding-top: 0.9rem;
+  border-top: 1px solid var(--line);
+}
+
+.apskel-name-statusBadge {
+  font-size: 0.76rem;
+  font-weight: 650;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0.15rem 0.7rem;
+  background: var(--surface);
+}
+
+.apskel-name-tagBox { margin-top: 0.75rem; }
+
+.apskel-multi-select-list { display: flex; flex-wrap: wrap; gap: 0.4rem 0.9rem; }
+.apskel-multi-select-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.9rem;
+}
+
+.apskel-name-editorNav,
+.apskel-name-readerNav,
+.apskel-name-expoNav { margin-top: 1.5rem; }
+
+/* ---------- the reader -------------------------------------------------- */
+
+.apskel-name-readTitle {
+  font-family: var(--serif);
+  font-size: 2rem;
+  font-weight: 700;
+  line-height: 1.2;
+  margin-top: 0.5rem;
+}
+
+.apskel-name-readMeta {
+  font-size: 0.82rem;
+  color: var(--muted);
+  margin: 0.3rem 0 1.25rem;
+}
+
+.apskel-name-reader .apskel-rich-text-view,
+.apskel-rich-text-view {
+  font-family: var(--serif);
+  font-size: 1.05rem;
+  line-height: 1.7;
+}
+
+.apskel-rich-text-view h1,
+.apskel-rich-text-view h2,
+.apskel-rich-text-view h3 {
+  font-family: var(--serif);
+  line-height: 1.25;
+  margin: 1.2em 0 0.4em;
+}
+.apskel-rich-text-view h1 { font-size: 1.5em; }
+.apskel-rich-text-view h2 { font-size: 1.25em; }
+.apskel-rich-text-view h3 { font-size: 1.1em; }
+.apskel-rich-text-view p { margin: 0.65em 0; }
+.apskel-rich-text-view a { color: var(--brand); }
+.apskel-rich-text-view code {
+  font-family: var(--mono);
+  font-size: 0.86em;
+  background: color-mix(in srgb, var(--line) 45%, transparent);
   border-radius: 4px;
-  background: #fff;
+  padding: 0.1em 0.35em;
+}
+.apskel-rich-text-view ul { margin: 0.65em 0; padding-left: 1.4em; }
+
+/* ---------- expositions -------------------------------------------------- */
+
+.apskel-name-expoTitleView {
+  font-family: var(--serif);
+  font-size: 1.7rem;
+  font-weight: 700;
+  margin-top: 0.5rem;
+}
+.apskel-name-expoDescription { color: var(--muted); margin: 0.3rem 0 1.25rem; }
+.apskel-name-expoArticles,
+.apskel-name-ruleList { margin-top: 0.75rem; }
+
+/* ---------- the conflict prompt ----------------------------------------- */
+
+.apskel-conflict-prompt .apskel-name-panel {
+  background: var(--warn-bg);
+  border: 1px solid var(--warn-line);
+  border-radius: var(--radius);
+  padding: 0.9rem 1.1rem;
+  gap: 0.4rem;
+  margin-bottom: 1.25rem;
+  color: var(--warn-ink);
+}
+.apskel-name-conflictHead { font-weight: 650; }
+.apskel-name-mineRow,
+.apskel-name-theirsRow {
+  font-family: var(--mono);
+  font-size: 0.82rem;
+  background: color-mix(in srgb, var(--warn-line) 25%, transparent);
+  border-radius: 6px;
+  padding: 0.35rem 0.6rem;
+  overflow-wrap: anywhere;
+}
+.apskel-name-verbRow { gap: 0.5rem; margin-top: 0.4rem; }
+
+/* ---------- responsive --------------------------------------------------- */
+
+@media (max-width: 700px) {
+  #apskel-root { padding: 0 0.9rem 3rem; }
+  .apskel-name-who { padding: 0.55rem 0.9rem; margin-bottom: 1rem; flex-wrap: wrap; }
+  .apskel-name-whoEmail { display: none; } /* the status pill carries it on phones */
+
+  /* side-by-side arrangements stack */
+  .apskel-name-authRow { flex-direction: column; }
+  .apskel-rich-text-split { flex-direction: column; }
+  .apskel-name-pubBar,
+  .apskel-name-ruleBar { flex-wrap: wrap; }
+
+  .apskel-name-readTitle { font-size: 1.55rem; }
+
+  /* comfortable touch targets */
+  .apskel-button-control { padding: 0.5rem 0.95rem; }
 }

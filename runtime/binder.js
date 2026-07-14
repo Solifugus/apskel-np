@@ -41,6 +41,10 @@ export function mountApp(root, { store, engine, document, primitives, rootEl, fu
   function mountNode(node, parentEl) {
     const el = document.createElement("div");
     el.className = `apskel apskel-${node.type}`;
+    // The node's XML name is the theme's semantic hook ("one app-level
+    // theme (semantic tokens/classes)") — the name the developer wrote
+    // is the class the theme targets. Load-time, stateless, no new axis.
+    if (node.name) el.classList.add(`apskel-name-${node.name}`);
     el.dataset.path = node.path;
     parentEl.appendChild(el);
 
