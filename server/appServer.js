@@ -13,6 +13,14 @@ const repoDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 // database on every page load (reload shows the draft as left).
 export function createAppServer({ appDir, bundleProvider }) {
   const app = express();
+  // Everything this server serves changes when the app or framework
+  // changes, and a stale bundle silently misses new behavior — so
+  // no-cache across the board: the browser revalidates every request
+  // (ETag 304s keep that cheap) and a plain reload is always enough.
+  app.use((req, res, next) => {
+    res.set("Cache-Control", "no-cache");
+    next();
+  });
   // Structural CSS is optional per primitive: link only what exists (the
   // app's override dir first, then the framework's), so a css-less
   // primitive doesn't 404 the shell into MIME warnings.

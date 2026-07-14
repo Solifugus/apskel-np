@@ -10,33 +10,42 @@
         {ruleTag = ""}
         {ruleKind = "has"}
 
-        <who type="layout" orient="horizontal">
-            Signed in as: {app.identity.email} — {app.identity.status}
+        <who type="layout" orient="horizontal" space="between">
+            <brand type="button" action='apskel.nav.go("/")'>Knowledge Foyer</brand>
+            <identityBadge type="layout" orient="horizontal">
+                <whoEmail type="layout" visible="app.identity.email">{app.identity.email}</whoEmail>
+                <whoStatus type="layout">{app.identity.status}</whoStatus>
+            </identityBadge>
         </who>
 
-        <signup type="register" visible="app.view: landing"/>
-        <signin type="login" visible="app.view: landing"/>
-
         <landing type="layout" orient="vertical" visible="app.view: landing">
-            Published articles:
+            <authRow type="layout" orient="horizontal" visible="app.identity.status: anonymous">
+                <signup type="register"/>
+                <signin type="login"/>
+            </authRow>
+            <publishedHead type="layout">Published articles</publishedHead>
             <published type="layout" orient="vertical" source="publishedArticles" order=".published_at desc" limit="20">
-                <row type="layout" orient="horizontal">
-                    {.title}
+                <row type="layout" orient="horizontal" space="between">
+                    <rowTitle type="layout">{.title}</rowTitle>
                     <read type="button" action='apskel.field.set(app.view, "article", app.currentEditionId, .id)'>Read</read>
                 </row>
             </published>
-            My drafts (empty until you log in):
+            <draftsHead type="layout">My drafts</draftsHead>
+            <draftsHint type="layout" visible="app.identity.status: anonymous">Sign in to see your drafts.</draftsHint>
             <drafts type="layout" orient="vertical" source="myDrafts">
-                <row type="layout" orient="horizontal">
-                    {.title}
+                <row type="layout" orient="horizontal" space="between">
+                    <rowTitle type="layout">{.title}</rowTitle>
                     <open type="button" action='apskel.field.set(app.view, "editor", app.currentEditionId, .id)'>Edit</open>
                 </row>
             </drafts>
-            Expositions:
+            <expoHead type="layout">Expositions</expoHead>
             <expoList type="layout" orient="vertical" table="expositions" order=".id asc" limit="20">
-                <row type="layout" orient="horizontal">
-                    {.title}
-                    <openExpo type="button" action='apskel.field.set(app.view, "exposition", app.currentExpositionId, .id)'>View</openExpo>
+                <row type="layout" orient="horizontal" space="between">
+                    <rowTitle type="layout">{.title}</rowTitle>
+                    <expoActions type="layout" orient="horizontal">
+                        <openExpo type="button" action='apskel.field.set(app.view, "exposition", app.currentExpositionId, .id)'>View</openExpo>
+                        <dropExpo type="button" action='apskel.data.remove("expositions", .id)'>delete</dropExpo>
+                    </expoActions>
                 </row>
             </expoList>
             <expoBar type="layout" orient="horizontal">
@@ -49,27 +58,36 @@
             <conflictPrompt type="conflict-prompt"/>
             <articleEditor type="text-editor" table="article_editions" record="app.currentEditionId" conflict="detect"/>
             <pubBar type="layout" orient="horizontal" table="article_editions" record="app.currentEditionId" conflict="detect">
-                Status: {.status}
+                <statusBadge type="layout" orient="horizontal">{.status}</statusBadge>
                 <publish type="button" action='apskel.field.set(.status, "published")'>Publish</publish>
                 <nextEdition type="button" action='apskel.data.create("article_editions", "article_id", .article_id, "title", .title, "body", .body)'>Start next edition</nextEdition>
             </pubBar>
             <tagBox type="layout" orient="vertical" table="articles" record="1">
-                Tags (article 1 — the fixed-record stopgap):
+                <tagsLabel type="layout">Tags</tagsLabel>
+                <tagsHint type="layout">article 1 — the fixed-record stopgap</tagsHint>
                 <tagPicker type="multi-select" field=".tags: tags.id->tags.name"/>
             </tagBox>
-            <toLanding type="button" action='apskel.nav.go("/")'>Back to landing</toLanding>
+            <editorNav type="layout" orient="horizontal">
+                <toLanding type="button" action='apskel.nav.go("/")'>Back to landing</toLanding>
+            </editorNav>
         </workspace>
 
         <reader type="layout" orient="vertical" visible="app.view: article" source="publishedEdition" record="app.currentEditionId">
-            Title: {.title}
+            <readTitle type="layout">{.title}</readTitle>
+            <readMeta type="layout">Published {.published_at}</readMeta>
+            <readerActions type="layout" orient="horizontal">
+                <nextEditionFromReader type="button" action='apskel.data.create("article_editions", "article_id", .article_id, "title", .title, "body", .body)'>Start next edition</nextEditionFromReader>
+            </readerActions>
             <bodyView type="rich-text" mode="view" field=".body"/>
-            Published: {.published_at}
         </reader>
+        <feedbackHead type="layout" visible="app.view: article">Comments</feedbackHead>
         <feedback type="layout" orient="vertical" visible="app.view: article" table="comments" filter=".edition_id: app.currentEditionId" order=".id asc" limit="50">
-            <row type="layout" orient="horizontal">
-                {.body}
-                <pro type="button" action='apskel.data.create("comment_marks", "comment_id", .id, "kind", "pro")'>pro</pro>
-                <con type="button" action='apskel.data.create("comment_marks", "comment_id", .id, "kind", "con")'>con</con>
+            <row type="layout" orient="horizontal" space="between">
+                <rowTitle type="layout">{.body}</rowTitle>
+                <marks type="layout" orient="horizontal">
+                    <pro type="button" action='apskel.data.create("comment_marks", "comment_id", .id, "kind", "pro")'>pro</pro>
+                    <con type="button" action='apskel.data.create("comment_marks", "comment_id", .id, "kind", "con")'>con</con>
+                </marks>
             </row>
         </feedback>
         <tallies type="layout" orient="vertical" visible="app.view: article" source="commentTallies(app.currentEditionId)">
@@ -86,18 +104,18 @@
         </readerNav>
 
         <expositionView type="layout" orient="vertical" visible="app.view: exposition" table="expositions" record="app.currentExpositionId">
-            Exposition: {.title}
-            {.description}
+            <expoTitleView type="layout">{.title}</expoTitleView>
+            <expoDescription type="layout">{.description}</expoDescription>
         </expositionView>
         <expoArticles type="layout" orient="vertical" visible="app.view: exposition" source="expositionArticles(app.currentExpositionId)">
-            <row type="layout" orient="horizontal">
-                {.title}
+            <row type="layout" orient="horizontal" space="between">
+                <rowTitle type="layout">{.title}</rowTitle>
                 <read type="button" action='apskel.field.set(app.view, "article", app.currentEditionId, .id)'>Read</read>
             </row>
         </expoArticles>
         <ruleList type="layout" orient="vertical" visible="app.view: exposition" table="exposition_tag_rules" filter=".exposition_id: app.currentExpositionId" order=".id asc">
-            <row type="layout" orient="horizontal">
-                {.rule} tag {.tag_id}
+            <row type="layout" orient="horizontal" space="between">
+                <rowTitle type="layout">{.rule} tag {.tag_id}</rowTitle>
                 <drop type="button" action='apskel.data.remove("exposition_tag_rules", .id)'>remove</drop>
             </row>
         </ruleList>

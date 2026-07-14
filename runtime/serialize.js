@@ -245,12 +245,11 @@ export function collectSelectOptions(root) {
 // column. apskel.data.get for these goes through the query wrap.
 export function collectQueryBound(root) {
   const byStorePath = new Map();
-  for (const site of root.allRefs) {
-    const binding = site.binding;
-    if (!binding || binding.kind !== "bound" || binding.table) continue;
-    if (binding.target.isCollection) continue;
+  function add(binding) {
+    if (!binding || binding.kind !== "bound" || binding.table) return;
+    if (binding.target.isCollection) return;
     const storePath = storePathOf(binding);
-    if (byStorePath.has(storePath)) continue;
+    if (byStorePath.has(storePath)) return;
     const target = binding.target;
     const rawRecord = target.attrs.record ?? null;
     const src = target.sourceSite.binding;
@@ -272,6 +271,19 @@ export function collectQueryBound(root) {
     };
     if (target.recordSite) entry.recordPath = storePathOf(target.recordSite.binding);
     byStorePath.set(storePath, entry);
+  }
+  for (const site of root.allRefs) {
+    add(site.binding);
+    // Function-call arguments are sub-bindings inside the call, not
+    // allRefs entries — read at press time, so their columns must be
+    // fetched like any bound field. Same lesson collectBoundFields
+    // learned in Phase 8; the reader's next-edition composer needs
+    // .article_id it never displays.
+    if (site.binding?.kind === "function") {
+      for (const a of site.binding.args) {
+        if (a.kind === "ref") add(a.binding);
+      }
+    }
   }
   return [...byStorePath.values()];
 }

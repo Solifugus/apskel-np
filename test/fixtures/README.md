@@ -644,8 +644,12 @@ Exercises all four source forms from the session-4 entries:
   (`filter=".created_by: app.identity.userId"`) — a change to the
   reference value re-runs the fetch, like a selection change.
 * `reader`: a **query-sourced record context**
-  (`source="publishedEditions" record="app.currentEditionId"`) — text
-  refs only; reads go through the query wrap.
+  (`source="publishedEditions" record="app.currentEditionId"`) — reads
+  go through the query wrap. Its `next` button's create action carries a
+  bound arg with no display site (`.article_id`): collectQueryBound must
+  descend into function-call args so the column is fetched like any
+  bound field (read at press time — the same lesson collectBoundFields
+  learned in Phase 8).
 * `byTag`: parameterized call-grammar mount
   (`source="publishedByTag(app.currentTag)"`), arity load-checked
   against the declared `params="tag"`.

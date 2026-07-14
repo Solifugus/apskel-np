@@ -125,12 +125,26 @@ check(
 
 check(
   "the query-sourced record context collects into queryBound, not bound",
-  queryBound.length === 1 &&
-    queryBound[0].storePath === "app.reader.title" &&
-    queryBound[0].query === "publishedEditions" &&
-    queryBound[0].recordPath === "app.currentEditionId" &&
-    collectBoundFields(root).length === 0,
+  queryBound.some(
+    (q) =>
+      q.storePath === "app.reader.title" &&
+      q.query === "publishedEditions" &&
+      q.recordPath === "app.currentEditionId"
+  ) && collectBoundFields(root).length === 0,
   JSON.stringify({ queryBound, bound: collectBoundFields(root) })
+);
+
+check(
+  "a create-action argument under a query context collects too — read at press time, so fetched like any bound field",
+  queryBound.length === 2 &&
+    queryBound.some(
+      (q) =>
+        q.storePath === "app.reader.article_id" &&
+        q.field === "article_id" &&
+        q.query === "publishedEditions" &&
+        q.recordPath === "app.currentEditionId"
+    ),
+  JSON.stringify(queryBound)
 );
 
 {

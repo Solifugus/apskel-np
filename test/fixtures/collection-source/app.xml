@@ -15,6 +15,7 @@
 
         <reader type="layout" orient="vertical" source="publishedEditions" record="app.currentEditionId">
             Title: {.title}
+            <next type="button" action='apskel.data.create("article_editions", "article_id", .article_id, "title", .title)'>Next edition</next>
         </reader>
 
         <byTag type="layout" orient="vertical" source="publishedByTag(app.currentTag)">
